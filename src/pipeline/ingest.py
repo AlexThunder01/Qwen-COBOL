@@ -34,21 +34,15 @@ SHARD_SIZE = 5_000
 
 
 def iter_xmainframe() -> Iterator[dict]:
-    """Stream XMainframe training corpus (Fsoft-AIC/XMainframe, MIT license)."""
-    try:
-        ds = load_dataset("Fsoft-AIC/XMainframe", split="train", streaming=True, trust_remote_code=True)
-    except Exception:
-        # Fallback: try alternate dataset name
-        ds = load_dataset("mrzaizai2k/XMainframe", split="train", streaming=True, trust_remote_code=True)
+    """Stream XMainframe training corpus.
 
-    for row in ds:
-        content = row.get("code") or row.get("content") or row.get("text") or ""
-        if content:
-            yield {
-                "content": content,
-                "source": "xmainframe",
-                "path": row.get("file_path", row.get("path", "")),
-            }
+    Fsoft-AIC/XMainframe non è mai stato pubblicato come dataset HF nonostante
+    il paper lo menzionasse. La funzione è un no-op — skip_xmainframe=True
+    per default nel notebook Kaggle.
+    """
+    logger.warning("iter_xmainframe: dataset Fsoft-AIC/XMainframe non disponibile su HF Hub — skippato")
+    return
+    yield  # make it a generator
 
 
 def iter_the_stack_v2() -> Iterator[dict]:
@@ -57,7 +51,6 @@ def iter_the_stack_v2() -> Iterator[dict]:
         "bigcode/the-stack-v2-dedup",
         split="train",
         streaming=True,
-        trust_remote_code=True,
     )
     for row in ds:
         lang = (row.get("programming_language") or "").lower()
