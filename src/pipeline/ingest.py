@@ -100,11 +100,6 @@ def iter_nist(gnucobol_share_dir: Path) -> Iterator[dict]:
             continue
 
 
-def _push_shard(api: HfApi, records: list[dict], idx: int) -> None:
-    ds = Dataset.from_list(records)
-    ds.push_to_hub(HUB_CORPUS_REPO, split=f"train", private=True, append=True)
-
-
 def run_ingest(
     zenodo_dir: str = "/data/xcobol",
     repos_dir: str = "/data/community_repos",
@@ -112,10 +107,8 @@ def run_ingest(
     skip_stack: bool = False,
     skip_xmainframe: bool = False,
 ) -> None:
-    api = HfApi()
     deduper = MinHashDeduper(threshold=0.7)
-    buffer: list[dict] = []
-    total = 0
+    all_records: list[dict] = []
 
     sources: list[Iterator[dict]] = []
     if not skip_xmainframe:
@@ -137,19 +130,14 @@ def run_ingest(
                 continue
             deduper.add(record["content"])
             record["difficulty_score"] = score_difficulty(record["content"])
-            buffer.append(record)
+            all_records.append(record)
+            if len(all_records) % SHARD_SIZE == 0:
+                logger.info("Raccolti %d record finora…", len(all_records))
 
-            if len(buffer) >= SHARD_SIZE:
-                _push_shard(api, buffer, total // SHARD_SIZE)
-                total += len(buffer)
-                logger.info("Pushed shard (%d records total)", total)
-                buffer = []
-
-    if buffer:
-        _push_shard(api, buffer, total // SHARD_SIZE)
-        total += len(buffer)
-
-    logger.info("Ingest complete: %d records", total)
+    logger.info("Ingest completo: %d record. Push su HF Hub…", len(all_records))
+    ds = Dataset.from_list(all_records)
+    ds.push_to_hub(HUB_CORPUS_REPO, split="train", private=True)
+    logger.info("Push completato: %d record su %s", len(all_records), HUB_CORPUS_REPO)
 
 
 def main() -> None:
