@@ -46,20 +46,23 @@ def iter_xmainframe() -> Iterator[dict]:
 
 
 def iter_the_stack_v2() -> Iterator[dict]:
-    """Stream The Stack v2 dedup filtered to COBOL."""
+    """Stream The Stack v2 dedup — subset COBOL diretto.
+
+    The Stack v2 è organizzato per linguaggio come subset separati.
+    Caricare 'COBOL' evita di scansionare i 67TB totali del dataset.
+    """
     ds = load_dataset(
         "bigcode/the-stack-v2-dedup",
+        "COBOL",
         split="train",
         streaming=True,
     )
     for row in ds:
-        lang = (row.get("programming_language") or "").lower()
-        if lang == "cobol":
-            yield {
-                "content": row.get("content", ""),
-                "source": "the-stack-v2",
-                "path": row.get("path", ""),
-            }
+        yield {
+            "content": row.get("content", ""),
+            "source": "the-stack-v2",
+            "path": row.get("path", ""),
+        }
 
 
 def iter_xcobol_zenodo(zenodo_dir: Path) -> Iterator[dict]:
