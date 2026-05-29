@@ -1,0 +1,48 @@
+version: "3.9"
+
+# vLLM inference container — requires NVIDIA GPU (L40S for FP8, any 16GB+ for AWQ)
+# Usage: docker compose up (after setting MODEL_ID and HF_TOKEN in .env)
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: qwen-cobol-vllm
+    ports:
+      - "8000:8000"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN}"
+    command: >
+      --model ${MODEL_ID:-YOUR_HF_USERNAME/qwen-cobol-27b-awq}
+      --quantization ${QUANTIZATION:-awq_marlin}
+      --max-model-len 16384
+      --gpu-memory-utilization 0.90
+      --tensor-parallel-size 1
+      --max-num-seqs 32
+      --host 0.0.0.0
+      --port 8000
+      --enable-prefix-caching
+      --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+
+  # Optional: Open WebUI for browser-based chat
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: qwen-cobol-webui
+    ports:
+      - "3000:8080"
+    environment:
+      OPENAI_API_BASE_URL: "http://vllm:8000/v1"
+      OPENAI_API_KEY: "EMPTY"
+    depends_on:
+      - vllm
+
+volumes:
+  hf_cache:

@@ -1,0 +1,41 @@
+# Secrets
+.env
+*.pem
+*.key
+
+# Data — lives on HF Hub, not in git
+data/
+outputs/
+results/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# uv
+.uv/
+uv.lock
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Weights & Biases
+wandb/
+
+# Model artifacts (too large for git)
+*.safetensors
+*.bin
+*.gguf
+*.pt
+*.ckpt
+
+# SQLite caches (reproducible from source)
+*.sqlite
+
+# OS
+.DS_Store
+Thumbs.db

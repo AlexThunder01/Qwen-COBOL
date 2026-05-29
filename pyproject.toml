@@ -1,0 +1,88 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qwen-cobol"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Datasets + HF Hub (streaming mode is mandatory — see storage strategy)
+    "datasets>=3.0",
+    "huggingface-hub>=0.26",
+    # Deduplication (MinHash LSH)
+    "datasketch",
+    # Data wrangling
+    "pyarrow>=15.0",
+    "pandas>=2.0",
+    # COBOL parsing — tree-sitter-language-pack bundles COBOL grammar (release May 2026)
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.7",
+    # OpenAI-compatible client — used to call vLLM server from synth scripts
+    "openai>=1.0",
+    # Experiment tracking
+    "wandb",
+    # Utilities
+    "tqdm",
+    "rich",
+    "pyyaml",
+    "python-dotenv",
+    "sqlitedict",
+]
+
+[project.optional-dependencies]
+# Training stack — torch<2.11 (unsloth constraint)
+# uv sync --extra train
+train = [
+    "unsloth>=2026.5.0",
+    "trl>=0.19.1,<=0.24.0",
+    "peft>=0.18.0",
+    "transformers>=4.51",
+    "bitsandbytes>=0.49.0",
+    "accelerate>=1.0",
+]
+# Synthetic data generation — needs google-generativeai (protobuf<6, conflicts with quant)
+# uv sync --extra synth
+synth = [
+    "google-generativeai",
+]
+# Inference + retrieval stack — torch==2.11 (vllm constraint), conflicts with train
+# uv sync --extra inference
+inference = [
+    "vllm>=0.21.0",
+    "qdrant-client>=1.12",
+    "neo4j>=5.20",
+    "sentence-transformers>=3.0",
+]
+# W7 quantization only — protobuf>=7.34 (conflicts with synth/google-generativeai)
+# uv sync --extra quant  (on a fresh Lightning Studio, no google-generativeai)
+quant = [
+    "llmcompressor>=0.10.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "mypy",
+    "ipykernel",
+    "jupyterlab",
+]
+
+[tool.uv]
+# These packages only exist for Linux (unsloth, vllm, bitsandbytes have no Windows wheels)
+environments = ["sys_platform == 'linux'"]
+# Declare incompatible extra pairs so uv doesn't try to resolve them together
+conflicts = [
+    [{ extra = "train" }, { extra = "inference" }],
+    [{ extra = "synth" }, { extra = "quant" }],
+    [{ extra = "quant" }, { extra = "inference" }],
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

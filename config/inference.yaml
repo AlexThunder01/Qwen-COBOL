@@ -1,0 +1,46 @@
+# Inference config — vLLM serve + retrieval settings
+
+vllm:
+  # Update model path after quantization (W7)
+  model: "YOUR_HF_USERNAME/qwen-cobol-27b-awq"  # or -14b-awq for fallback
+  dtype: "auto"
+  quantization: "awq_marlin"          # AWQ with Marlin kernel — fastest on L40S
+  max_model_len: 16384
+  gpu_memory_utilization: 0.90
+  tensor_parallel_size: 1             # single L40S
+  max_num_seqs: 32
+  host: "0.0.0.0"
+  port: 8000
+
+# FP8 variant (for L40S / H100 only — higher quality, uses ~27GB VRAM)
+vllm_fp8:
+  model: "YOUR_HF_USERNAME/qwen-cobol-27b-fp8"
+  dtype: "float8_e4m3fn"
+  quantization: "fp8"
+  max_model_len: 16384
+  gpu_memory_utilization: 0.92
+  tensor_parallel_size: 1
+
+retrieval:
+  neo4j:
+    uri: "bolt://localhost:7687"
+    user: "neo4j"
+    # password loaded from .env: NEO4J_PASSWORD
+  qdrant:
+    host: "localhost"
+    port: 6333
+    collection: "cobol_snippets"
+  embedding_model: "BAAI/bge-m3"
+  top_k_vector: 10
+  top_k_graph: 5
+  lazy_graphrag:
+    max_community_size: 50
+    summarization_model: "YOUR_HF_USERNAME/qwen-cobol-27b-awq"   # local model for summaries
+
+generation:
+  # Qwen3.6 hybrid thinking — enable for complex tasks (translation, refactoring)
+  thinking_budget: 2048              # max thinking tokens; set 0 to disable for simple Q&A
+  temperature: 0.2
+  top_p: 0.9
+  repetition_penalty: 1.05
+  max_new_tokens: 4096
