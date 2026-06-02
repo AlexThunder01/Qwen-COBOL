@@ -1,14 +1,10 @@
 """
 W3 Step 3 — Bulk SFT generation via XMAiNframe-10.5b teacher on Modal A100.
 
-Architettura:
-  - Immagine ufficiale vllm/vllm-openai (dipendenze pre-testate, no conflitti)
-  - vllm.LLM Python API diretta (no subprocess, no health-check polling)
-  - Generazione in batch: tutti i prompt in una sola chiamata llm.chat()
-  - Push checkpoint su HF Hub ogni PUSH_EVERY esempi
-  - Ripresa automatica da HF Hub se il job viene interrotto
+Usa transformers direttamente (no vLLM) → zero dependency conflicts.
+XMAiNframe-10.5b in bf16 = ~21GB → entra comodamente su A100-80GB.
 
-Costo stimato: ~500 esempi pilot ≈ $1.50 (~15 min); full 35k ≈ $10-12 (~5h).
+Costo stimato: ~500 pilot ≈ $1.50 (~20 min); full 35k ≈ $12-15 (~6h).
 
 Usage:
   python -m modal run scripts/modal_teacher_bulk.py               # full 35k
@@ -23,23 +19,19 @@ import random
 
 import modal
 
-# ── Immagine: vllm ufficiale + nostri extra ───────────────────────────────────
 image = (
     modal.Image.from_registry("python:3.11-slim-trixie")
+    .apt_install("git")
     .pip_install(
-        "vllm==0.9.0",
+        "torch==2.5.1",
+        "transformers>=4.51.1",
+        "accelerate>=1.0.0",
         "datasets",
         "huggingface-hub",
         "pandas",
         "pyarrow",
-    )
-    # vLLM 0.9.0 bug: ovis.py registra "aimv2" senza exist_ok=True, ma transformers
-    # >= 4.51.1 lo ha già built-in → patch chirurgica al file sorgente
-    .run_commands(
-        "find /usr/local/lib -name 'ovis.py' -path '*/vllm/*' "
-        "-exec sed -i "
-        "'s/AutoConfig.register(\"aimv2\", AIMv2Config)/AutoConfig.register(\"aimv2\", AIMv2Config, exist_ok=True)/g' "
-        "{} +"
+        "sentencepiece",
+        "protobuf",
     )
 )
 
@@ -55,6 +47,7 @@ PUSH_EVERY        = 500
 DEFAULT_TARGET    = 35_000
 MIN_DIFFICULTY    = 0.15
 MAX_SNIPPET_CHARS = 2_000
+BATCH_SIZE        = 8
 
 TASK_TEMPLATES: dict[str, str] = {
     "explain": (
@@ -80,13 +73,14 @@ BULK_TASKS = list(TASK_TEMPLATES.keys())
 @app.function(
     gpu="A100-80GB",
     volumes={MODEL_CACHE: model_volume},
-    timeout=4 * 3600,
+    timeout=6 * 3600,
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
 def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     from datasets import Dataset, load_dataset
     from huggingface_hub import hf_hub_download
-    from vllm import LLM, SamplingParams
     import pandas as pd
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -121,9 +115,8 @@ def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
     df = df[df["difficulty_score"] >= MIN_DIFFICULTY].copy()
     df["content"] = df["content"].str[:MAX_SNIPPET_CHARS]
     records = df.sample(frac=1, random_state=42).to_dict("records")
-    logger.info("Corpus: %d snippet disponibili", len(records))
+    logger.info("Corpus: %d snippet", len(records))
 
-    # Build lista prompt (snippet × task, fino al target rimanente)
     needed = target - len(accumulated)
     task_cycle = BULK_TASKS * (needed // len(BULK_TASKS) + 2)
     random.seed(0)
@@ -140,47 +133,85 @@ def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
                 "task": task,
                 "difficulty_score": float(record.get("difficulty_score", 0.3)),
             })
-    logger.info("Prompt da generare: %d (needed: %d)", len(prompts), needed)
+    logger.info("Prompt da generare: %d", len(prompts))
 
-    # ── 3. Carica modello via Python API ──────────────────────────────────────
+    # ── 3. Carica modello ─────────────────────────────────────────────────────
     logger.info("Caricamento %s …", TEACHER_MODEL)
-    llm = LLM(
-        model=TEACHER_MODEL,
-        download_dir=MODEL_CACHE,
-        dtype="bfloat16",
-        max_model_len=4096,
-        gpu_memory_utilization=0.88,
+    tokenizer = AutoTokenizer.from_pretrained(
+        TEACHER_MODEL,
+        cache_dir=MODEL_CACHE,
+        token=token,
         trust_remote_code=True,
     )
-    sampling_params = SamplingParams(temperature=0.7, max_tokens=1024)
-    logger.info("Modello caricato.")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    model = AutoModelForCausalLM.from_pretrained(
+        TEACHER_MODEL,
+        cache_dir=MODEL_CACHE,
+        token=token,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    model.eval()
+    logger.info("Modello caricato su %s", next(model.parameters()).device)
 
     # ── 4. Genera in batch con checkpoint push ────────────────────────────────
     def push(examples: list[dict]) -> None:
-        ds = Dataset.from_list(examples)
-        ds.push_to_hub(SFT_REPO, split="teacher_bulk", private=True, token=token)
+        Dataset.from_list(examples).push_to_hub(
+            SFT_REPO, split="teacher_bulk", private=True, token=token
+        )
 
-    BATCH = 256  # processa 256 prompt alla volta (VRAM-friendly)
     new_since_push = 0
 
-    for batch_start in range(0, len(prompts), BATCH):
+    for batch_start in range(0, len(prompts), BATCH_SIZE):
         if len(accumulated) >= target:
             break
 
-        batch = prompts[batch_start : batch_start + BATCH]
-        conversations = [
-            [{"role": "user", "content": p["user_content"]}]
-            for p in batch
-        ]
+        batch = prompts[batch_start : batch_start + BATCH_SIZE]
+
+        # Applica chat template
+        try:
+            texts = [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p["user_content"]}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for p in batch
+            ]
+        except Exception:
+            # Fallback: nessun chat template → prompt diretto
+            texts = [p["user_content"] for p in batch]
+
+        inputs = tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=2048,
+        ).to(model.device)
 
         try:
-            outputs = llm.chat(conversations, sampling_params, use_tqdm=False)
+            with torch.no_grad():
+                out_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=512,
+                    temperature=0.7,
+                    do_sample=True,
+                    pad_token_id=tokenizer.pad_token_id,
+                )
+            # Decodifica solo i token nuovi (dopo il prompt)
+            new_ids = out_ids[:, inputs["input_ids"].shape[1]:]
+            answers = tokenizer.batch_decode(new_ids, skip_special_tokens=True)
         except Exception as e:
             logger.warning("Batch %d fallito: %s", batch_start, e)
             continue
 
-        for p, out in zip(batch, outputs):
-            answer = out.outputs[0].text.strip()
+        for p, answer in zip(batch, answers):
+            answer = answer.strip()
             if not answer:
                 continue
             accumulated.append({
@@ -198,12 +229,12 @@ def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
             logger.info("Checkpoint: %d/%d su HF Hub", len(accumulated), target)
             new_since_push = 0
 
-        logger.info(
-            "Batch %d/%d — totale: %d/%d",
-            batch_start // BATCH + 1,
-            (len(prompts) + BATCH - 1) // BATCH,
-            len(accumulated), target,
-        )
+        if (batch_start // BATCH_SIZE) % 10 == 0:
+            logger.info(
+                "Batch %d — totale: %d/%d",
+                batch_start // BATCH_SIZE,
+                len(accumulated), target,
+            )
 
     push(accumulated)
     logger.info("Teacher bulk completato: %d esempi", len(accumulated))
