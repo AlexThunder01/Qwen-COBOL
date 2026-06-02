@@ -25,14 +25,19 @@ REJECT_PROMPT_SUFFIX = (
 
 
 def generate_dpo_pair(
-    user_prompt: str,
-    chosen_response: str,
+    sft_row: dict,
     teacher_model: str,
 ) -> dict | None:
     """
-    Given a (prompt, chosen) pair, generate a rejected variant and validate the pair.
+    Given an SFT row (messages + difficulty_score), generate a rejected variant.
     Returns a DPO-format dict or None if the pair is invalid.
     """
+    messages = sft_row.get("messages", [])
+    if len(messages) < 2:
+        return None
+    user_prompt = messages[0]["content"]
+    chosen_response = messages[1]["content"]
+
     reject_prompt = {"task_type": "debug", "source": chosen_response + REJECT_PROMPT_SUFFIX, "difficulty_score": 0.8}
     results = generate_batch([reject_prompt], teacher_model=teacher_model, temperature=0.9)
     rejected_ex = results[0]

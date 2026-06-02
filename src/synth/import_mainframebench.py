@@ -6,7 +6,7 @@ Splits:
   - QA                        → 2,598 examples  (question answering)
   - MCQ                       → 1,931 examples  (multiple choice)
 
-Output: HF Hub private dataset `YOUR_HF_USERNAME/cobol-sft-dataset` (appended).
+Output: HF Hub private dataset `AlexThunder0/cobol-sft-dataset` (appended).
 Format: ChatML with optional <thinking> prefix for complex examples.
 
 Run on Kaggle or local — no GPU needed.
@@ -23,7 +23,7 @@ from src.synth.thinking_traces import maybe_add_thinking_prefix
 
 logger = logging.getLogger(__name__)
 
-HUB_SFT_REPO = "YOUR_HF_USERNAME/cobol-sft-dataset"
+HUB_SFT_REPO = "AlexThunder0/cobol-sft-dataset"
 MAINFRAMEBENCH_REPO = "Fsoft-AIC/MainframeBench"
 
 

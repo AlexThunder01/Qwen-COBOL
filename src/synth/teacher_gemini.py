@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_NAME = "gemini-2.5-flash"
 CACHE_PATH = Path("data/gemini_cache.sqlite")
-OUTPUT_REPO = "YOUR_HF_USERNAME/cobol-sft-dataset"
+OUTPUT_REPO = "AlexThunder0/cobol-sft-dataset"
 RATE_LIMIT_SLEEP = 0.1  # seconds between requests (stay well under 1500/day)
 
 
