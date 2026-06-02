@@ -26,7 +26,7 @@ from datasets import Dataset, load_dataset, concatenate_datasets
 from huggingface_hub import hf_hub_download
 import pandas as pd
 
-from src.synth.teacher_gemini import configure as configure_gemini, generate_gold_example
+from src.synth.teacher_gemini import configure as configure_gemini, generate_gold_example, TASK_TEMPLATES as GEMINI_TASK_TEMPLATES
 from src.synth.teacher_vllm import generate_batch, TASK_TEMPLATES as VLLM_TEMPLATES
 from src.synth.dpo_pairs import generate_dpo_pair
 from src.synth.curriculum_sampler import build_curriculum
@@ -88,36 +88,73 @@ def step_mainframebench() -> None:
 
 # ── Step 2: Gemini gold (CPU, Kaggle, 1500 req/day rate-limit) ───────────────
 
+# Push a HF ogni ~15 min (10 RPM × 15 min = 150 richieste)
+_GEMINI_PUSH_EVERY = 150
+
+
 def step_gemini() -> None:
     """
     Generate high-quality SFT examples via Gemini 2.5 Flash free tier.
-    Rate-limited to 1500 req/day → runs over 3-4 days.
-    Resumes automatically via SQLite cache (no duplicate calls on restart).
-    Needs: GEMINI_API_KEY env var.
+    - Riprende automaticamente da HF Hub (nessun dato perso tra sessioni Kaggle)
+    - Push checkpoint ogni ~150 esempi (~15 min) per sopravvivere ai crash
+    - Rate limit: ~1500 req/giorno → 3-4 giorni per 5k esempi
+    Needs: GEMINI_API_KEY, HF_TOKEN env vars.
     """
     configure_gemini()
-    df = _load_corpus_df()
+    token = os.environ.get("HF_TOKEN")
 
-    # Prefer high-difficulty snippets for Gemini gold
+    # ── Riprendi da HF Hub se esiste già un gemini_gold split ────────────────
+    accumulated: list[dict] = []
+    done_keys: set[int] = set()
+    try:
+        existing = load_dataset(SFT_REPO, split="gemini_gold", token=token)
+        accumulated = [dict(row) for row in existing]
+        done_keys = {hash(row["messages"][0]["content"]) for row in accumulated if row.get("messages")}
+        logger.info("Ripreso da HF Hub: %d esempi già generati", len(accumulated))
+    except Exception:
+        logger.info("Nessun gemini_gold su HF Hub — parto da zero")
+
+    if len(accumulated) >= GEMINI_TARGET:
+        logger.info("Target già raggiunto (%d/%d) — niente da fare", len(accumulated), GEMINI_TARGET)
+        return
+
+    # ── Carica corpus e prepara lista snippet × task ──────────────────────────
+    df = _load_corpus_df()
     hard = df[df["difficulty_score"] >= 0.5].sample(frac=1, random_state=42)
     snippets = hard["content"].tolist()
 
-    examples: list[dict] = []
     task_cycle = GEMINI_TASKS * (GEMINI_TARGET // len(GEMINI_TASKS) + 1)
     random.seed(42)
     random.shuffle(task_cycle)
 
+    new_since_push = 0
     for i, (task, snippet) in enumerate(zip(task_cycle, snippets)):
-        if len(examples) >= GEMINI_TARGET:
+        if len(accumulated) >= GEMINI_TARGET:
             break
+
+        # Salta se già generato in una sessione precedente
+        user_prompt = GEMINI_TASK_TEMPLATES[task].format(source=snippet)
+        if hash(user_prompt) in done_keys:
+            continue
+
         ex = generate_gold_example(task, snippet)
         if ex:
-            examples.append(ex)
-        if (i + 1) % 100 == 0:
-            logger.info("Gemini: %d/%d generated (processed %d snippets)", len(examples), GEMINI_TARGET, i + 1)
+            accumulated.append(ex)
+            done_keys.add(hash(user_prompt))
+            new_since_push += 1
 
-    _push_sft(examples, split="gemini_gold")
-    logger.info("Gemini gold done: %d examples", len(examples))
+        # Checkpoint push ogni ~15 min
+        if new_since_push >= _GEMINI_PUSH_EVERY:
+            _push_sft(accumulated, split="gemini_gold")
+            logger.info("Checkpoint: %d/%d esempi su HF Hub", len(accumulated), GEMINI_TARGET)
+            new_since_push = 0
+
+        if (i + 1) % 50 == 0:
+            logger.info("Gemini: %d/%d (snippet %d)", len(accumulated), GEMINI_TARGET, i + 1)
+
+    # Push finale
+    _push_sft(accumulated, split="gemini_gold")
+    logger.info("Gemini gold completato: %d esempi", len(accumulated))
 
 
 # ── Step 3: Bulk teacher via vLLM (Modal A100, overnight) ────────────────────
