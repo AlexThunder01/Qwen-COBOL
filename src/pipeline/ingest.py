@@ -45,24 +45,29 @@ def iter_xmainframe() -> Iterator[dict]:
     yield  # make it a generator
 
 
-def iter_the_stack_v2() -> Iterator[dict]:
-    """Stream The Stack v2 dedup — subset COBOL diretto.
+def iter_the_stack(stack_config: str = "v1") -> Iterator[dict]:
+    """Stream COBOL da The Stack.
 
-    The Stack v2 è organizzato per linguaggio come subset separati.
-    Caricare 'COBOL' evita di scansionare i 67TB totali del dataset.
+    IMPORTANTE: The Stack v2 è metadata-only — `content` è vuoto, il codice va
+    scaricato separatamente da Software Heritage S3 (serve account AWS).
+    The Stack v1 (`bigcode/the-stack-dedup`) invece ha il contenuto INLINE.
+    Usiamo v1. Nota: è gated — accettare i termini su
+    https://huggingface.co/datasets/bigcode/the-stack-dedup
     """
     ds = load_dataset(
-        "bigcode/the-stack-v2-dedup",
-        "COBOL",
+        "bigcode/the-stack-dedup",
+        data_dir="data/cobol",
         split="train",
         streaming=True,
     )
     for row in ds:
-        yield {
-            "content": row.get("content", ""),
-            "source": "the-stack-v2",
-            "path": row.get("path", ""),
-        }
+        content = row.get("content", "")
+        if content:
+            yield {
+                "content": content,
+                "source": "the-stack-v1",
+                "path": row.get("max_stars_repo_path") or row.get("path", ""),
+            }
 
 
 def iter_xcobol_zenodo(zenodo_dir: Path) -> Iterator[dict]:
@@ -114,7 +119,7 @@ def run_ingest(
     if not skip_xmainframe:
         sources.append(iter_xmainframe())
     if not skip_stack:
-        sources.append(iter_the_stack_v2())
+        sources.append(iter_the_stack())
     if Path(zenodo_dir).exists():
         sources.append(iter_xcobol_zenodo(Path(zenodo_dir)))
     if Path(repos_dir).exists():
