@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 from typing import Iterator
 
@@ -45,13 +46,10 @@ def iter_xmainframe() -> Iterator[dict]:
     yield  # make it a generator
 
 
-def iter_the_stack(stack_config: str = "v1") -> Iterator[dict]:
-    """Stream COBOL da The Stack.
+def iter_the_stack_v1() -> Iterator[dict]:
+    """Stream COBOL da The Stack v1 (`bigcode/the-stack-dedup`) — content INLINE.
 
-    IMPORTANTE: The Stack v2 è metadata-only — `content` è vuoto, il codice va
-    scaricato separatamente da Software Heritage S3 (serve account AWS).
-    The Stack v1 (`bigcode/the-stack-dedup`) invece ha il contenuto INLINE.
-    Usiamo v1. Nota: è gated — accettare i termini su
+    Gated: accettare i termini su
     https://huggingface.co/datasets/bigcode/the-stack-dedup
     """
     ds = load_dataset(
@@ -68,6 +66,70 @@ def iter_the_stack(stack_config: str = "v1") -> Iterator[dict]:
                 "source": "the-stack-v1",
                 "path": row.get("max_stars_repo_path") or row.get("path", ""),
             }
+
+
+def iter_the_stack_v2() -> Iterator[dict]:
+    """Stream COBOL da The Stack v2 dedup (~36k file) scaricando il content da
+    Software Heritage S3.
+
+    The Stack v2 è metadata-only: ogni row ha `blob_id` + `src_encoding`, il
+    codice va scaricato da `s3://softwareheritage/content/{blob_id}` (gzip).
+    Serve un account AWS con credenziali in env:
+      AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+
+    Volume atteso: ~36k file → ~40M token (10x la v1).
+    """
+    import boto3
+    from smart_open import open as s3_open
+
+    session = boto3.Session(
+        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+    )
+    s3 = session.client("s3")
+
+    def download_content(blob_id: str, src_encoding: str) -> str | None:
+        url = f"s3://softwareheritage/content/{blob_id}"
+        try:
+            with s3_open(url, "rb", compression=".gz", transport_params={"client": s3}) as fin:
+                return fin.read().decode(src_encoding, errors="replace")
+        except Exception as e:
+            logger.debug("blob %s fallito: %s", blob_id, e)
+            return None
+
+    ds = load_dataset(
+        "bigcode/the-stack-v2-dedup",
+        "COBOL",
+        split="train",
+        streaming=True,
+    )
+    n_ok = n_fail = 0
+    for row in ds:
+        blob_id = row.get("blob_id")
+        if not blob_id:
+            continue
+        content = download_content(blob_id, row.get("src_encoding", "utf-8"))
+        if content:
+            n_ok += 1
+            yield {
+                "content": content,
+                "source": "the-stack-v2",
+                "path": row.get("path", ""),
+            }
+        else:
+            n_fail += 1
+        if (n_ok + n_fail) % 2000 == 0:
+            logger.info("Stack v2: %d scaricati, %d falliti", n_ok, n_fail)
+
+
+def iter_the_stack() -> Iterator[dict]:
+    """Sceglie v2 (con download S3) se ci sono credenziali AWS, altrimenti v1."""
+    if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+        logger.info("The Stack v2 (download S3) — credenziali AWS presenti")
+        yield from iter_the_stack_v2()
+    else:
+        logger.info("The Stack v1 (content inline) — nessuna credenziale AWS")
+        yield from iter_the_stack_v1()
 
 
 def iter_xcobol_zenodo(zenodo_dir: Path) -> Iterator[dict]:
