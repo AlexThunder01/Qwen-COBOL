@@ -21,6 +21,29 @@ MIN_CONTENT_BYTES = 50
 MAX_CONTENT_BYTES = 16_384 * 4  # ~64K chars; longer programs get chunked at training time
 
 
+# Marker che identificano COBOL valido (incl. copybook con sole SELECT/level).
+_COBOL_MARKERS = re.compile(
+    r"\b(IDENTIFICATION|DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION\b"
+    r"|\bPIC(TURE)?\s+[X9SVAP(]"
+    r"|\b(PERFORM|MOVE|WORKING-STORAGE|COMPUTE|DISPLAY|GOBACK|STOP\s+RUN|EVALUATE)\b"
+    r"|\b(SELECT\s+\w+\s+ASSIGN|FILE-CONTROL|ASSIGN\s+TO|ORGANIZATION\s+IS)\b",
+    re.IGNORECASE,
+)
+_MARKUP_TAG = re.compile(r"<[a-zA-Z/!]")
+
+
+def _is_cobol(content: str) -> bool:
+    """True se il record è COBOL plausibile (non script/markup/dati misclassificati)."""
+    if not _COBOL_MARKERS.search(content):
+        return False
+    if len(_MARKUP_TAG.findall(content)) > 20:  # XML/HTML travestito
+        return False
+    head = content[:2000]
+    if head and sum(1 for ch in head if ord(ch) > 126) / len(head) > 0.40:
+        return False  # encoding rotto/binario (soglia alta per tenere commenti CJK)
+    return True
+
+
 def clean_record(raw: dict) -> dict | None:
     """Normalize a raw COBOL source record. Returns None if the record should be dropped."""
     content = raw.get("content", "")
@@ -32,6 +55,13 @@ def clean_record(raw: dict) -> dict | None:
 
     if len(content.encode()) < MIN_CONTENT_BYTES:
         return None
+    if not _is_cobol(content):
+        return None
+
+    # Cap dimensione: tronca i file giganti per limitare la dominanza di singoli
+    # codebase (es. ORCA) e per il chunking a training time.
+    if len(content) > MAX_CONTENT_BYTES:
+        content = content[:MAX_CONTENT_BYTES]
 
     return {**raw, "content": content}
 
