@@ -16,7 +16,6 @@ import os
 import time
 from pathlib import Path
 
-import google.generativeai as genai
 from sqlitedict import SqliteDict
 
 from src.synth.thinking_traces import wrap_with_thinking
@@ -55,6 +54,35 @@ TASK_TEMPLATES: dict[str, str] = {
 }
 
 
+def _get_client():
+    """Return a google.genai client (new SDK) or fall back to generativeai (old SDK)."""
+    try:
+        from google import genai
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        return ("new", client)
+    except ImportError:
+        import google.generativeai as genai_old
+        genai_old.configure(api_key=os.environ["GEMINI_API_KEY"])
+        return ("old", genai_old)
+
+
+def _call_gemini(client_info, user_prompt: str) -> str:
+    """Call Gemini and return raw text. Works with both old and new SDK."""
+    sdk, client = client_info
+    if sdk == "new":
+        from google.genai import types
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+        )
+        return response.text
+    else:
+        model = client.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_PROMPT)
+        response = model.generate_content(user_prompt)
+        return response.text
+
+
 def generate_gold_example(task_type: str, source: str) -> dict | None:
     """Call Gemini and return a formatted SFT example dict, or None on failure."""
     template = TASK_TEMPLATES.get(task_type)
@@ -64,19 +92,18 @@ def generate_gold_example(task_type: str, source: str) -> dict | None:
     user_prompt = template.format(source=source)
     cache_key = f"{task_type}::{hash(user_prompt)}"
 
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with SqliteDict(str(CACHE_PATH)) as cache:
         if cache_key in cache:
             return cache[cache_key]
 
+    client_info = _get_client()
     try:
-        model = genai.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_PROMPT)
-        response = model.generate_content(user_prompt)
-        raw_text = response.text
-    except Exception as exc:  # noqa: BLE001
+        raw_text = _call_gemini(client_info, user_prompt)
+    except Exception as exc:
         logger.warning("Gemini call failed (%s) — skipping", exc)
         return None
 
-    # Extract <thinking> block if present
     thinking, answer = _split_thinking(raw_text)
     if thinking:
         assistant_content = wrap_with_thinking(thinking, answer)
@@ -89,7 +116,7 @@ def generate_gold_example(task_type: str, source: str) -> dict | None:
             {"role": "assistant", "content": assistant_content},
         ],
         "source": f"gemini_{task_type}",
-        "difficulty_score": 0.75,  # gold examples are hard by design
+        "difficulty_score": 0.75,
     }
 
     with SqliteDict(str(CACHE_PATH)) as cache:
@@ -106,7 +133,6 @@ def _split_thinking(text: str) -> tuple[str, str]:
     end = text.find("</thinking>")
     if start == -1 or end == -1:
         return "", text
-
     thinking = text[start + len("<thinking>"):end].strip()
     answer = text[end + len("</thinking>"):].strip()
     return thinking, answer
@@ -116,4 +142,3 @@ def configure() -> None:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY environment variable not set")
-    genai.configure(api_key=api_key)
