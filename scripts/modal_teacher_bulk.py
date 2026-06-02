@@ -25,8 +25,15 @@ import modal
 
 # ── Immagine: vllm ufficiale + nostri extra ───────────────────────────────────
 image = (
-    modal.Image.from_registry("vllm/vllm-openai:v0.9.0")
-    .run_commands("pip3 install datasets huggingface-hub pandas pyarrow")
+    modal.Image.from_registry("python:3.11-slim-trixie")
+    .pip_install(
+        "vllm==0.9.0",
+        "transformers>=4.51.1,<5.0",  # pin: vllm 0.9.0 + transformers 5.x → aimv2 conflict
+        "datasets",
+        "huggingface-hub",
+        "pandas",
+        "pyarrow",
+    )
 )
 
 app = modal.App("qwen-cobol-teacher-bulk", image=image)
