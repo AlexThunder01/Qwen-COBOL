@@ -28,11 +28,18 @@ image = (
     modal.Image.from_registry("python:3.11-slim-trixie")
     .pip_install(
         "vllm==0.9.0",
-        "transformers>=4.51.1,<5.0",  # pin: vllm 0.9.0 + transformers 5.x → aimv2 conflict
         "datasets",
         "huggingface-hub",
         "pandas",
         "pyarrow",
+    )
+    # vLLM 0.9.0 bug: ovis.py registra "aimv2" senza exist_ok=True, ma transformers
+    # >= 4.51.1 lo ha già built-in → patch chirurgica al file sorgente
+    .run_commands(
+        "find /usr/local/lib -name 'ovis.py' -path '*/vllm/*' "
+        "-exec sed -i "
+        "'s/AutoConfig.register(\"aimv2\", AIMv2Config)/AutoConfig.register(\"aimv2\", AIMv2Config, exist_ok=True)/g' "
+        "{} +"
     )
 )
 
