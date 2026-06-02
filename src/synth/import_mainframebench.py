@@ -25,12 +25,13 @@ logger = logging.getLogger(__name__)
 HUB_SFT_REPO = "AlexThunder0/cobol-sft-dataset"
 MAINFRAMEBENCH_REPO = "Fsoft-AIC/MainframeBench"
 
-# Colonne possibili per il codice COBOL (il dataset usa nomi diversi per split)
-_CODE_COLS = ("cobol_code", "code", "source_code", "cobol", "program", "source")
-# Colonne possibili per il summary/risposta
-_SUMMARY_COLS = ("summary", "description", "explanation", "answer", "output")
-# Colonne possibili per la domanda
-_QUESTION_COLS = ("question", "query", "input", "prompt")
+# Colonne reali MainframeBench (verificate sul dataset live 2026-06-02):
+# summarization: ['Unnamed: 0', 'prompt', 'source', 'summary']  → code=prompt, answer=summary
+# question_answering: colonne da verificare al primo run
+# multiple_choice_question: colonne da verificare al primo run
+_CODE_COLS = ("prompt", "cobol_code", "code", "source_code", "cobol", "program", "source")
+_SUMMARY_COLS = ("summary", "answer", "description", "explanation", "output")
+_QUESTION_COLS = ("question", "query", "prompt", "input")
 
 
 def _pick(row: dict, candidates: tuple[str, ...], fallback: str = "") -> str:
@@ -98,13 +99,13 @@ def run_import() -> None:
     _log_columns("summarization", summ)
     summ = summ.map(_format_summarization, remove_columns=summ.column_names)
 
-    logger.info("Loading MainframeBench QA …")
-    qa = load_dataset(MAINFRAMEBENCH_REPO, "QA", split="train")
+    logger.info("Loading MainframeBench question_answering …")
+    qa = load_dataset(MAINFRAMEBENCH_REPO, "question_answering", split="train")
     _log_columns("QA", qa)
     qa = qa.map(_format_qa, remove_columns=qa.column_names)
 
-    logger.info("Loading MainframeBench MCQ …")
-    mcq = load_dataset(MAINFRAMEBENCH_REPO, "MCQ", split="train")
+    logger.info("Loading MainframeBench multiple_choice_question …")
+    mcq = load_dataset(MAINFRAMEBENCH_REPO, "multiple_choice_question", split="train")
     _log_columns("MCQ", mcq)
     mcq = mcq.map(_format_mcq, remove_columns=mcq.column_names)
 
