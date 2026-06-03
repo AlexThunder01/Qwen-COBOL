@@ -28,6 +28,7 @@ import pandas as pd
 
 from src.synth.teacher_gemini import configure as configure_gemini, generate_gold_example, TASK_TEMPLATES as GEMINI_TASK_TEMPLATES
 from src.synth.teacher_vllm import generate_batch, TASK_TEMPLATES as VLLM_TEMPLATES
+from src.synth.teacher_alibaba import generate_example as alibaba_generate, TEACHER_MODELS as ALIBABA_MODELS, BULK_TASKS as ALIBABA_TASKS
 from src.synth.dpo_pairs import generate_dpo_pair
 from src.synth.curriculum_sampler import build_curriculum
 from src.synth.import_mainframebench import run_import as import_mainframebench
@@ -230,12 +231,94 @@ def step_dpo(teacher_model: str) -> None:
         logger.info("DPO done: %d pairs → %s", len(pairs), DPO_REPO)
 
 
+# ── Step: Alibaba DashScope teacher (CPU, Kaggle) ─────────────────────────────
+
+ALIBABA_PER_MODEL_TARGET = 1_000  # ~1k esempi per modello (1M token budget)
+_ALIBABA_PUSH_EVERY = 150         # push ogni 150 nuovi esempi (~15 min)
+
+
+def step_alibaba() -> None:
+    """
+    Genera esempi SFT gold via Alibaba DashScope (OpenAI-compatible, CPU).
+    Cascata di modelli: qwen3-coder-plus → 235b-thinking → max → qwq-plus.
+    Resume automatico da HF Hub tra sessioni. Push ogni 150 esempi.
+    Needs: ALIBABA_API env var.
+    """
+    token = os.environ.get("HF_TOKEN")
+    df = _load_corpus_df()
+    hard = df[df["difficulty_score"] >= 0.5].sample(frac=1, random_state=7)
+    snippets = hard.to_dict("records")
+
+    # Riprendi da HF Hub
+    accumulated: list[dict] = []
+    done_keys: set[int] = set()
+    try:
+        existing = load_dataset(SFT_REPO, split="alibaba_gold", token=token)
+        accumulated = [dict(r) for r in existing]
+        done_keys = {hash(r["messages"][0]["content"]) for r in accumulated if r.get("messages")}
+        logger.info("Ripreso: %d esempi già generati", len(accumulated))
+    except Exception:
+        logger.info("Nessun alibaba_gold su HF — parto da zero")
+
+    total_target = ALIBABA_PER_MODEL_TARGET * len(ALIBABA_MODELS)
+    if len(accumulated) >= total_target:
+        logger.info("Target già raggiunto (%d) — esco", len(accumulated))
+        return
+
+    task_cycle = ALIBABA_TASKS * (total_target // len(ALIBABA_TASKS) + 2)
+    random.seed(7)
+    random.shuffle(task_cycle)
+
+    new_since_push = 0
+
+    for model in ALIBABA_MODELS:
+        model_examples = [r for r in accumulated if model.replace("-", "_") in r.get("source", "")]
+        if len(model_examples) >= ALIBABA_PER_MODEL_TARGET:
+            logger.info("Modello %s già completo (%d esempi) — skip", model, len(model_examples))
+            continue
+
+        logger.info("=== Teacher: %s ===", model)
+        model_count = len(model_examples)
+
+        for record, task in zip(snippets * 5, task_cycle):
+            if model_count >= ALIBABA_PER_MODEL_TARGET:
+                break
+
+            user_content = f"{task}::{record['content'][:200]}"
+            if hash(user_content) in done_keys:
+                continue
+
+            ex = alibaba_generate(
+                task=task,
+                source=record["content"],
+                model=model,
+                difficulty_score=record.get("difficulty_score", 0.5),
+                use_thinking=(task in {"debug", "translation_redefines", "modernize_goto"}),
+            )
+            if ex:
+                accumulated.append(ex)
+                done_keys.add(hash(user_content))
+                model_count += 1
+                new_since_push += 1
+
+            if new_since_push >= _ALIBABA_PUSH_EVERY:
+                _push_sft(accumulated, split="alibaba_gold")
+                logger.info("Checkpoint: %d esempi totali su HF Hub", len(accumulated))
+                new_since_push = 0
+
+        logger.info("Modello %s completato: %d esempi", model, model_count)
+
+    _push_sft(accumulated, split="alibaba_gold")
+    logger.info("Alibaba gold completato: %d esempi totali", len(accumulated))
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run_orchestration(step: str, teacher_model: str) -> None:
     steps = {
         "mainframebench": step_mainframebench,
         "gemini": step_gemini,
+        "alibaba": step_alibaba,
         "teacher": lambda: step_teacher(teacher_model),
         "dpo": lambda: step_dpo(teacher_model),
     }
@@ -248,7 +331,7 @@ if __name__ == "__main__":
     import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     p = argparse.ArgumentParser()
-    p.add_argument("--step", required=True, choices=["mainframebench", "gemini", "teacher", "dpo"])
+    p.add_argument("--step", required=True, choices=["mainframebench", "gemini", "alibaba", "teacher", "dpo"])
     p.add_argument("--teacher", default="Fsoft-AIC/XMAiNframe-instruct-10.5b")
     args = p.parse_args()
     run_orchestration(args.step, args.teacher)
