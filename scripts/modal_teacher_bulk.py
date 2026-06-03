@@ -70,6 +70,16 @@ TASK_TEMPLATES: dict[str, str] = {
 BULK_TASKS = list(TASK_TEMPLATES.keys())
 
 
+def _clean_output(text: str) -> str:
+    """Rimuove artefatti BPE byte-level (stile GPT-2) e header del chat template."""
+    import re
+    text = re.sub(r'^\s*<\|assistant\|>\s*', '', text)  # header echoed
+    text = text.replace('Ġ', ' ')   # Ġ → spazio
+    text = text.replace('Ċ', '\n')  # Ċ → newline
+    text = text.replace('ĉ', '\t')  # ĉ → tab
+    return text.strip()
+
+
 @app.function(
     gpu="A100-80GB",
     volumes={MODEL_CACHE: model_volume},
@@ -211,7 +221,7 @@ def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
             continue
 
         for p, answer in zip(batch, answers):
-            answer = answer.strip()
+            answer = _clean_output(answer)
             if not answer:
                 continue
             accumulated.append({
