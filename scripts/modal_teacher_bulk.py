@@ -47,9 +47,10 @@ PUSH_EVERY        = 500
 DEFAULT_TARGET    = 35_000
 MIN_DIFFICULTY    = 0.15
 MAX_SNIPPET_CHARS = 2_000
-BATCH_SIZE        = 32   # A100-80GB: modello 21GB + attivazioni, fit abbondante
-MAX_NEW_TOKENS    = 256  # sufficiente per explain/refactor/debug/java
+BATCH_SIZE        = 24   # ~3x sul pilot (batch 8), margine OOM su A100-80GB
+MAX_NEW_TOKENS    = 512  # NON abbassare: explain/java median ~2000 char → troncerebbe
 MAX_INPUT_LEN     = 1024 # snippets ~500 token, padding overhead ridotto
+TEMPERATURE       = 0.5  # target di training: priorità correttezza, non diversità
 
 TASK_TEMPLATES: dict[str, str] = {
     "explain": (
@@ -211,7 +212,7 @@ def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
                 out_ids = model.generate(
                     **inputs,
                     max_new_tokens=MAX_NEW_TOKENS,
-                    temperature=0.7,
+                    temperature=TEMPERATURE,
                     do_sample=True,
                     pad_token_id=tokenizer.pad_token_id,
                 )
