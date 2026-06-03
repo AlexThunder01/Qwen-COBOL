@@ -234,7 +234,8 @@ def step_dpo(teacher_model: str) -> None:
 # ── Step: Alibaba DashScope teacher (CPU, Kaggle) ─────────────────────────────
 
 ALIBABA_PER_MODEL_TARGET = 1_000  # ~1k esempi per modello (1M token budget)
-_ALIBABA_PUSH_EVERY = 50          # push ogni 50 nuovi esempi (~5 min)
+_ALIBABA_PUSH_EVERY_FAST     = 50   # modelli veloci (~4s/esempio): push ogni ~3 min
+_ALIBABA_PUSH_EVERY_THINKING = 20   # modelli thinking (~60s/esempio): push ogni ~20 min
 
 
 def step_alibaba() -> None:
@@ -280,7 +281,12 @@ def step_alibaba() -> None:
         logger.info("=== Teacher: %s ===", model)
         model_count = len(model_examples)
         consecutive_failures = 0
-        MAX_CONSECUTIVE_FAILURES = 10  # se 10 di fila falliscono → quota esaurita
+        MAX_CONSECUTIVE_FAILURES = 10
+        push_every = (
+            _ALIBABA_PUSH_EVERY_THINKING
+            if ("thinking" in model or "qwq" in model)
+            else _ALIBABA_PUSH_EVERY_FAST
+        )
 
         for record, task in zip(snippets * 5, task_cycle):
             if model_count >= ALIBABA_PER_MODEL_TARGET:
@@ -312,7 +318,7 @@ def step_alibaba() -> None:
             else:
                 consecutive_failures += 1
 
-            if new_since_push >= _ALIBABA_PUSH_EVERY:
+            if new_since_push >= push_every:
                 _push_sft(accumulated, split="alibaba_gold")
                 logger.info("Checkpoint: %d esempi totali su HF Hub", len(accumulated))
                 new_since_push = 0
