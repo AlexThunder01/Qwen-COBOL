@@ -88,14 +88,13 @@ def generate_example(
     user_content = template.format(source=source)
     client = _get_client()
 
-    # Per i modelli thinking, possiamo scegliere se abilitare il reasoning
+    # Modelli thinking-only ("thinking" o "qwq" nel nome): enable_thinking
+    # deve essere sempre True — non supportano False.
     extra = {}
-    if use_thinking and task in THINKING_TASKS:
+    if "thinking" in model or "qwq" in model:
         extra = {"extra_body": {"enable_thinking": True}}
-    else:
-        # Disabilita thinking per velocità/costo
-        if "thinking" in model or "qwq" in model:
-            extra = {"extra_body": {"enable_thinking": False}}
+    elif use_thinking and task in THINKING_TASKS:
+        extra = {"extra_body": {"enable_thinking": True}}
 
     try:
         resp = client.chat.completions.create(
