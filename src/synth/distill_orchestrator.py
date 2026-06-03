@@ -279,9 +279,17 @@ def step_alibaba() -> None:
 
         logger.info("=== Teacher: %s ===", model)
         model_count = len(model_examples)
+        consecutive_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 10  # se 10 di fila falliscono → quota esaurita
 
         for record, task in zip(snippets * 5, task_cycle):
             if model_count >= ALIBABA_PER_MODEL_TARGET:
+                break
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                logger.warning(
+                    "Modello %s: %d fallimenti consecutivi — quota esaurita, passo al prossimo",
+                    model, consecutive_failures,
+                )
                 break
 
             user_content = f"{task}::{record['content'][:200]}"
@@ -300,6 +308,9 @@ def step_alibaba() -> None:
                 done_keys.add(hash(user_content))
                 model_count += 1
                 new_since_push += 1
+                consecutive_failures = 0  # reset al primo successo
+            else:
+                consecutive_failures += 1
 
             if new_since_push >= _ALIBABA_PUSH_EVERY:
                 _push_sft(accumulated, split="alibaba_gold")
