@@ -22,10 +22,10 @@ from src.synth.thinking_traces import wrap_with_thinking
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-1.5-flash"  # 2.5-flash free tier = 20 RPD; 1.5-flash = 1500 RPD
 CACHE_PATH = Path("data/gemini_cache.sqlite")
 OUTPUT_REPO = "AlexThunder0/cobol-sft-dataset"
-RATE_LIMIT_SLEEP = 0.1  # seconds between requests (stay well under 1500/day)
+RATE_LIMIT_SLEEP = 4.5  # 15 RPM free tier → min 4s tra richieste (margine sicurezza)
 
 
 SYSTEM_PROMPT = """\
