@@ -234,7 +234,7 @@ def step_dpo(teacher_model: str) -> None:
 # ── Step: Alibaba DashScope teacher (CPU, Kaggle) ─────────────────────────────
 
 ALIBABA_PER_MODEL_TARGET = 1_000  # ~1k esempi per modello (1M token budget)
-_ALIBABA_PUSH_EVERY = 150         # push ogni 150 nuovi esempi (~15 min)
+_ALIBABA_PUSH_EVERY = 50          # push ogni 50 nuovi esempi (~5 min)
 
 
 def step_alibaba() -> None:
