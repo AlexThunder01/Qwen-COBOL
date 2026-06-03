@@ -47,7 +47,9 @@ PUSH_EVERY        = 500
 DEFAULT_TARGET    = 35_000
 MIN_DIFFICULTY    = 0.15
 MAX_SNIPPET_CHARS = 2_000
-BATCH_SIZE        = 8
+BATCH_SIZE        = 32   # A100-80GB: modello 21GB + attivazioni, fit abbondante
+MAX_NEW_TOKENS    = 256  # sufficiente per explain/refactor/debug/java
+MAX_INPUT_LEN     = 1024 # snippets ~500 token, padding overhead ridotto
 
 TASK_TEMPLATES: dict[str, str] = {
     "explain": (
@@ -201,14 +203,14 @@ def run_teacher_bulk(target: int = DEFAULT_TARGET) -> dict:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=2048,
+            max_length=MAX_INPUT_LEN,
         ).to(model.device)
 
         try:
             with torch.no_grad():
                 out_ids = model.generate(
                     **inputs,
-                    max_new_tokens=512,
+                    max_new_tokens=MAX_NEW_TOKENS,
                     temperature=0.7,
                     do_sample=True,
                     pad_token_id=tokenizer.pad_token_id,
