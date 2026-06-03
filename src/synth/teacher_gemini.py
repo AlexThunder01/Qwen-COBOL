@@ -16,8 +16,6 @@ import os
 import time
 from pathlib import Path
 
-from sqlitedict import SqliteDict
-
 from src.synth.thinking_traces import wrap_with_thinking
 
 logger = logging.getLogger(__name__)
@@ -91,6 +89,9 @@ def generate_gold_example(task_type: str, source: str) -> dict | None:
 
     user_prompt = template.format(source=source)
     cache_key = f"{task_type}::{hash(user_prompt)}"
+
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    from sqlitedict import SqliteDict  # lazy import — non serve se Gemini non è usato
 
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with SqliteDict(str(CACHE_PATH)) as cache:
