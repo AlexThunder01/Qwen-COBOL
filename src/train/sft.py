@@ -90,6 +90,40 @@ def run_sft(config_path: str) -> None:
         logger.info("Curriculum ordering per difficulty_score …")
         dataset = build_curriculum(dataset)
 
+    # ── Rendering ChatML → colonna `text` ────────────────────────────────────
+    # Usa il chat template del tokenizer se presente, altrimenti ChatML manuale
+    # (il modello BASE potrebbe non avere un template).
+    eos_token = tokenizer.eos_token or "<|im_end|>"
+    has_template = getattr(tokenizer, "chat_template", None) is not None
+
+    def render_chatml(msgs: list[dict]) -> str:
+        if has_template:
+            try:
+                return tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=False
+                )
+            except Exception:
+                pass
+        # Fallback ChatML manuale
+        parts = []
+        for m in msgs:
+            parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>")
+        return "\n".join(parts) + eos_token
+
+    logger.info("Rendering ChatML → text (template del tokenizer: %s) …", has_template)
+    dataset = dataset.map(
+        lambda ex: {"text": render_chatml(ex["messages"])},
+        remove_columns=[c for c in dataset.column_names if c != "text"],
+    )
+
+    # warmup_steps invece di warmup_ratio (deprecato in TRL >= 0.10)
+    total_steps = (
+        len(dataset)
+        // (sft_cfg["per_device_train_batch_size"] * sft_cfg["gradient_accumulation_steps"])
+        * sft_cfg["num_train_epochs"]
+    )
+    warmup_steps = max(1, int(total_steps * sft_cfg["warmup_ratio"]))
+
     training_args = SFTConfig(
         output_dir="./outputs/sft",
         num_train_epochs=sft_cfg["num_train_epochs"],
@@ -97,7 +131,7 @@ def run_sft(config_path: str) -> None:
         gradient_accumulation_steps=sft_cfg["gradient_accumulation_steps"],
         learning_rate=sft_cfg["learning_rate"],
         lr_scheduler_type=sft_cfg["lr_scheduler_type"],
-        warmup_ratio=sft_cfg["warmup_ratio"],
+        warmup_steps=warmup_steps,
         weight_decay=sft_cfg["weight_decay"],
         optim=sft_cfg["optim"],
         bf16=sft_cfg["bf16"],
@@ -109,6 +143,7 @@ def run_sft(config_path: str) -> None:
         hub_model_id=sft_cfg["hub_model_id"],
         report_to="wandb",
         max_seq_length=sft_cfg["max_seq_length"],
+        dataset_text_field="text",
     )
 
     trainer = SFTTrainer(
