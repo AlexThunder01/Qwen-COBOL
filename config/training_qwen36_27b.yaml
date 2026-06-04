@@ -9,7 +9,7 @@ model:
   bnb_4bit_use_double_quant: true
 
 dora:
-  use_dora: true
+  use_dora: false                   # LoRA: ~1.4x più veloce di DoRA, qualità simile (DoRA in iter 2)
   target_modules:
     - q_proj
     - k_proj
@@ -33,7 +33,7 @@ sft:
   warmup_ratio: 0.05
   weight_decay: 0.01
   optim: "paged_adamw_8bit"
-  gradient_checkpointing: "unsloth"
+  gradient_checkpointing: false     # 96GB → niente checkpointing, massima velocità
   fp16: false
   bf16: true
   logging_steps: 10
