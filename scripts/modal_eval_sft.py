@@ -43,11 +43,12 @@ SOTA_COMPILE = 0.7395
 SOTA_PASS1 = 0.4933
 
 # Istruzione che wrappa lo scheletro COBOLEval come task di completamento.
-# Esplicito "no explanation" per ridurre il thinking verboso che mangia i token.
+# Invita il reasoning (come addestrato) + chiede il programma finale in un blocco
+# alla fine → coerenza train/test + target pulito per l'estrazione.
 INSTRUCTION = (
     "Complete the following COBOL program by implementing the PROCEDURE DIVISION.\n"
-    "Output ONLY the complete COBOL program inside a single ```cobol code block. "
-    "Do NOT include any explanation, reasoning, or thinking process.\n\n"
+    "Reason step by step about the logic, then provide the complete, compilable "
+    "COBOL program inside a single ```cobol code block at the end.\n\n"
     "```cobol\n{prompt}\n```"
 )
 
