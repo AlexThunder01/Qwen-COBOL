@@ -42,10 +42,13 @@ COBOLEVAL_COMMIT = "0bb96c3114bb2bb28e221e9d6000614781f8609d"
 SOTA_COMPILE = 0.7395
 SOTA_PASS1 = 0.4933
 
-# Istruzione che wrappa lo scheletro COBOLEval come task di completamento
+# Istruzione che wrappa lo scheletro COBOLEval come task di completamento.
+# Esplicito "no explanation" per ridurre il thinking verboso che mangia i token.
 INSTRUCTION = (
-    "Complete the following COBOL program by implementing the PROCEDURE DIVISION. "
-    "Return the complete, compilable COBOL program.\n\n```cobol\n{prompt}\n```"
+    "Complete the following COBOL program by implementing the PROCEDURE DIVISION.\n"
+    "Output ONLY the complete COBOL program inside a single ```cobol code block. "
+    "Do NOT include any explanation, reasoning, or thinking process.\n\n"
+    "```cobol\n{prompt}\n```"
 )
 
 
@@ -68,22 +71,32 @@ def swap_sections(src: str) -> str:
 
 def extract_cobol(response: str, prompt: str) -> str:
     """
-    Estrae il programma COBOL dalla risposta dell'assistant.
-    Casi gestiti:
-      - risposta con ```cobol ... ``` → prende il blocco
-      - risposta che è già un programma intero (ha IDENTIFICATION DIVISION)
-      - risposta che è solo la completion (PROCEDURE DIVISION) → concatena al prompt
+    Estrae il programma COBOL dalla risposta, robusto al thinking verboso.
+    Priorità:
+      1. blocco fenced (ultimo) che contiene IDENTIFICATION DIVISION → programma intero
+      2. blocco fenced (ultimo) con PROCEDURE DIVISION → completion, concatena al prompt
+      3. slice dal primo IDENTIFICATION DIVISION fino a fine (no fences)
+      4. fallback: prompt + risposta intera
     """
-    # 1. Estrai blocco fenced se presente
-    m = re.search(r"```(?:cobol)?\s*\n(.*?)```", response, re.DOTALL | re.IGNORECASE)
-    code = m.group(1).strip() if m else response.strip()
+    blocks = re.findall(r"```(?:cobol)?\s*\n?(.*?)```", response, re.DOTALL | re.IGNORECASE)
 
-    # 2. Se il codice contiene già IDENTIFICATION DIVISION → è un programma intero
-    if re.search(r"IDENTIFICATION\s+DIVISION", code, re.IGNORECASE):
-        return code
+    # 1. Programma intero in un blocco (preferisci l'ultimo = risposta finale)
+    for b in reversed(blocks):
+        if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE):
+            return b.strip()
 
-    # 3. Altrimenti è una completion parziale → concatena allo scheletro del prompt
-    return prompt + "\n" + code
+    # 2. Solo completion (PROCEDURE DIVISION) in un blocco → concatena
+    for b in reversed(blocks):
+        if re.search(r"PROCEDURE\s+DIVISION", b, re.IGNORECASE):
+            return prompt + "\n" + b.strip()
+
+    # 3. Nessun fence: slice dal primo IDENTIFICATION DIVISION
+    m = re.search(r"(IDENTIFICATION\s+DIVISION.*)", response, re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # 4. Completion grezza senza struttura → concatena
+    return prompt + "\n" + response.strip()
 
 
 @app.function(
@@ -153,7 +166,8 @@ def run_eval(n_problems: int | None = None) -> dict:
         max_lora_rank=64,
     )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-    sampling = SamplingParams(temperature=0.0, max_tokens=2048)
+    # max_tokens alto: il thinking verboso + il programma devono starci entrambi
+    sampling = SamplingParams(temperature=0.0, max_tokens=4096)
     lora_req = LoRARequest("cobol-sft", 1, adapter_path)
 
     # ── Costruisci prompt chat-formatted ─────────────────────────────────────
