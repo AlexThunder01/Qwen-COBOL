@@ -44,7 +44,8 @@ model_vol = modal.Volume.from_name("qwen-cobol-model-cache", create_if_missing=T
 BASE_MODEL = "Qwen/Qwen3.6-27B"
 SFT_REPO = "AlexThunder0/cobol-sft-dataset"
 ADAPTER_REPO = "AlexThunder0/qwen-cobol-27b-sft"
-SPLITS = ["mainframebench", "teacher_bulk", "alibaba_gold", "generate_spec"]
+# generate_spec_valid = esempi generate-from-spec già filtrati per compile-validity
+SPLITS = ["mainframebench", "teacher_bulk", "alibaba_gold", "generate_spec_valid"]
 MAX_LEN = 2048
 
 
