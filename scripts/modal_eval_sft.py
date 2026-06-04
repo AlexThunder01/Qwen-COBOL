@@ -42,13 +42,16 @@ COBOLEVAL_COMMIT = "0bb96c3114bb2bb28e221e9d6000614781f8609d"
 SOTA_COMPILE = 0.7395
 SOTA_PASS1 = 0.4933
 
-# Istruzione che wrappa lo scheletro COBOLEval come task di completamento.
-# Invita il reasoning (come addestrato) + chiede il programma finale in un blocco
-# alla fine → coerenza train/test + target pulito per l'estrazione.
-INSTRUCTION = (
+# Due modalità per l'A/B test sul thinking:
+INSTRUCTION_THINK = (
     "Complete the following COBOL program by implementing the PROCEDURE DIVISION.\n"
-    "Reason step by step about the logic, then provide the complete, compilable "
-    "COBOL program inside a single ```cobol code block at the end.\n\n"
+    "Reason step by step, then provide the complete, compilable COBOL program "
+    "inside a single ```cobol code block at the end.\n\n"
+    "```cobol\n{prompt}\n```"
+)
+INSTRUCTION_DIRECT = (
+    "Complete the following COBOL program by implementing the PROCEDURE DIVISION. "
+    "Provide the complete, compilable COBOL program inside a single ```cobol code block.\n\n"
     "```cobol\n{prompt}\n```"
 )
 
@@ -115,7 +118,7 @@ def extract_cobol(response: str, prompt: str) -> str:
     volumes={"/models": model_vol},
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
-def run_eval(n_problems: int | None = None, use_lora: bool = True) -> dict:
+def run_eval(n_problems: int | None = None, use_lora: bool = True, think: bool = False) -> dict:
     import os
     import shutil
     import sys
@@ -167,35 +170,42 @@ def run_eval(n_problems: int | None = None, use_lora: bool = True) -> dict:
         lora_req = LoRARequest("cobol-sft", 1, adapter_path)
 
     mode = "base + LoRA SFT" if use_lora else "VANILLA instruct (no LoRA)"
-    print(f"Carico {BASE_MODEL} — {mode} …")
+    think_label = "THINKING ON" if think else "thinking off"
+    print(f"Carico {BASE_MODEL} — {mode} — {think_label} …")
+    # Thinking ON serve più contesto per finire il reasoning + risposta
+    max_len = 14336 if think else 8192
     llm = LLM(
         model=BASE_MODEL,
         download_dir="/models",
         dtype="bfloat16",
-        max_model_len=8192,
+        max_model_len=max_len,
         gpu_memory_utilization=0.92,
         enable_lora=use_lora,
         max_lora_rank=64,
     )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-    # Stop sequences: il checkpoint a 300 step allucina turni falsi (<|user|> ecc).
-    # Le fermiamo per evitare rambling e output incoerente.
+    # Thinking ON: serve molto spazio per il reasoning + risposta. OFF: basta 2048.
     sampling = SamplingParams(
         temperature=0.0,
-        max_tokens=4096,
+        max_tokens=8192 if think else 2048,
         stop=["<|user|>", "<|assistant|>", "<|im_end|>", "<|im_start|>", "<|endoftext|>"],
     )
 
-    # ── Costruisci prompt chat-formatted ─────────────────────────────────────
-    chat_prompts = []
-    for p in problems:
-        user_msg = INSTRUCTION.format(prompt=p["prompt"])
-        text = tokenizer.apply_chat_template(
-            [{"role": "user", "content": user_msg}],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        chat_prompts.append(text)
+    instruction = INSTRUCTION_THINK if think else INSTRUCTION_DIRECT
+
+    def build_chat(user_msg: str) -> str:
+        # think=False → enable_thinking=False (se supportato). think=True → default ON.
+        kwargs = dict(tokenize=False, add_generation_prompt=True)
+        if not think:
+            try:
+                return tokenizer.apply_chat_template(
+                    [{"role": "user", "content": user_msg}], enable_thinking=False, **kwargs)
+            except TypeError:
+                return tokenizer.apply_chat_template(
+                    [{"role": "user", "content": user_msg + " /no_think"}], **kwargs)
+        return tokenizer.apply_chat_template([{"role": "user", "content": user_msg}], **kwargs)
+
+    chat_prompts = [build_chat(instruction.format(prompt=p["prompt"])) for p in problems]
 
     print(f"Genero completions ({mode}) per {len(problems)} problemi …")
     gen_kwargs = {"lora_request": lora_req} if lora_req else {}
@@ -253,11 +263,12 @@ def run_eval(n_problems: int | None = None, use_lora: bool = True) -> dict:
 
 
 @app.local_entrypoint()
-def main(quick: bool = False, n_problems: int = 0, vanilla: bool = False):
-    """--vanilla: instruct puro senza LoRA (vero baseline chat-mode)."""
+def main(quick: bool = False, n_problems: int = 0, vanilla: bool = False, think: bool = False):
+    """--vanilla: instruct puro senza LoRA. --think: reasoning ON (max_tokens 8192)."""
     n = 10 if quick else (n_problems or None)
-    result = run_eval.remote(n_problems=n, use_lora=not vanilla)
+    result = run_eval.remote(n_problems=n, use_lora=not vanilla, think=think)
     name = "vanilla_chat" if vanilla else "sft_step300"
+    name += "_think" if think else "_direct"
     out_path = Path(f"results/{name}_qwen36_27b.json")
     out_path.parent.mkdir(exist_ok=True)
     with open(out_path, "w") as f:
