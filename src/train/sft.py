@@ -133,6 +133,7 @@ def run_sft(config_path: str) -> None:
     training_args = SFTConfig(
         output_dir="./outputs/sft",
         num_train_epochs=sft_cfg["num_train_epochs"],
+        max_steps=sft_cfg.get("max_steps", -1),
         per_device_train_batch_size=sft_cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=sft_cfg["gradient_accumulation_steps"],
         learning_rate=sft_cfg["learning_rate"],

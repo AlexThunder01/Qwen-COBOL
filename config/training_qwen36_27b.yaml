@@ -25,8 +25,9 @@ sft:
   lora_dropout: 0.0
   bias: "none"
   max_seq_length: 2048              # 17k esempi median ~700 token — 2048 ok, batch più grande
-  packing: true                     # impacchetta esempi corti → no padding sprecato → ~3x meno step
-  num_train_epochs: 1               # 1 epoca ≈ 380 step con packing
+  packing: true                     # (unsloth lo ignora, ma innocuo)
+  num_train_epochs: 1
+  max_steps: 440                    # cap budget: 440 × 25s ≈ 3h ≈ $9 (lascia ~$3 margine)
   per_device_train_batch_size: 4    # RTX PRO 6000 96GB → batch 4 con 27B QLoRA 4-bit
   gradient_accumulation_steps: 4   # effective batch = 16
   learning_rate: 2.0e-4
@@ -42,7 +43,7 @@ sft:
   save_total_limit: 1
   push_to_hub: true
   hub_model_id: "AlexThunder0/qwen-cobol-27b-sft"
-  curriculum: true                  # macchina continua → run completa → curriculum ok
+  curriculum: false                 # max_steps = run parziale → shuffle per rappresentatività
 
 dpo:
   r: 64
