@@ -38,9 +38,18 @@ DST_SPLIT = "generate_spec_valid"
 FAIL_REPO = "AlexThunder0/cobol-spec-failed"
 
 
+def _fix_first_line_indent(assistant: str) -> str:
+    """Recupera i dati corrotti dal bug \\s* in generazione: la prima riga del
+    programma era a colonna 1. Le aggiunge l'indentazione di area B (7 spazi)."""
+    def repl(m):
+        fence, first = m.group(1), m.group(2)
+        if first and not first[:1].isspace():
+            first = "       " + first
+        return fence + first
+    return re.sub(r"(```(?:cobol)?[ \t]*\r?\n)([^\n]*)", repl, assistant, count=1, flags=re.IGNORECASE)
+
+
 def _extract_program(assistant: str) -> str | None:
-    # [ \t]*\r?\n consuma solo la fine della riga ```cobol, NON l'indentazione
-    # della prima riga (cruciale per il formato a colonne COBOL).
     m = re.search(r"```(?:cobol)?[ \t]*\r?\n(.*?)```", assistant, re.DOTALL | re.IGNORECASE)
     return m.group(1).strip("\n") if m else None
 
@@ -79,14 +88,17 @@ def validate() -> dict:
     failed = []
     n_ok = n_bad = n_noprog = 0
     for row in ds:
-        prog = _extract_program(row["messages"][1]["content"])
+        # Recupera l'indentazione della 1ª riga (corrotta in generazione)
+        fixed_assistant = _fix_first_line_indent(row["messages"][1]["content"])
+        fixed_messages = [row["messages"][0], {"role": "assistant", "content": fixed_assistant}]
+        prog = _extract_program(fixed_assistant)
         if not prog:
             n_noprog += 1
             continue
         ok, err = try_compile(prog)
         if ok:
             kept.append({
-                "messages": list(row["messages"]),
+                "messages": fixed_messages,
                 "source": row["source"],
                 "difficulty_score": float(row["difficulty_score"]),
             })

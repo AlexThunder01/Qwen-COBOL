@@ -121,7 +121,8 @@ def get_client() -> OpenAI:
 def parse_response(text: str) -> tuple[str, str] | None:
     """Estrae (approach, full_program) dalla risposta del teacher."""
     approach_m = re.search(r"\[APPROACH\](.*?)\[PROGRAM\]", text, re.DOTALL | re.IGNORECASE)
-    code_m = re.search(r"```(?:cobol)?\s*\n?(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    # [ \t]*\r?\n preserva l'indentazione della 1ª riga (NON usare \s* goloso)
+    code_m = re.search(r"```(?:cobol)?[ \t]*\r?\n(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not code_m:
         return None
     program = code_m.group(1).strip()
