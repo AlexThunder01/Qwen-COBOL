@@ -38,15 +38,34 @@ DST_SPLIT = "generate_spec_valid"
 FAIL_REPO = "AlexThunder0/cobol-spec-failed"
 
 
-def _fix_first_line_indent(assistant: str) -> str:
-    """Recupera i dati corrotti dal bug \\s* in generazione: la prima riga del
-    programma era a colonna 1. Le aggiunge l'indentazione di area B (7 spazi)."""
-    def repl(m):
-        fence, first = m.group(1), m.group(2)
-        if first and not first[:1].isspace():
-            first = "       " + first
-        return fence + first
-    return re.sub(r"(```(?:cobol)?[ \t]*\r?\n)([^\n]*)", repl, assistant, count=1, flags=re.IGNORECASE)
+def _reindent_program(prog: str) -> str:
+    """Recupera il formato a colonne COBOL. Il teacher indenta il codice a 7 spazi
+    ma mette i commenti `*` a colonna 1 (e la 1ª riga). In fixed/variable format
+    il `*` deve stare a colonna 7, il codice in area A/B (col 8+).
+      - riga già indentata → invariata
+      - commento `*` a col 1 → 6 spazi davanti (`*` → col 7)
+      - codice a col 1 → 7 spazi davanti (→ col 8)
+    """
+    out = []
+    for line in prog.split("\n"):
+        if not line.strip():
+            out.append(line)
+        elif line[:1] in (" ", "\t"):
+            out.append(line)
+        elif line.lstrip().startswith("*"):
+            out.append("      " + line)   # 6 spazi → * a colonna 7
+        else:
+            out.append("       " + line)  # 7 spazi → codice a colonna 8
+    return "\n".join(out)
+
+
+def _fix_assistant(assistant: str) -> str:
+    """Estrae il programma dal blocco ```cobol, lo re-indenta, e ricostruisce
+    il messaggio assistant con il programma corretto."""
+    m = re.search(r"(.*?```(?:cobol)?[ \t]*\r?\n)(.*?)(```.*)", assistant, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return assistant
+    return m.group(1) + _reindent_program(m.group(2).strip("\n")) + "\n" + m.group(3)
 
 
 def _extract_program(assistant: str) -> str | None:
@@ -88,8 +107,8 @@ def validate() -> dict:
     failed = []
     n_ok = n_bad = n_noprog = 0
     for row in ds:
-        # Recupera l'indentazione della 1ª riga (corrotta in generazione)
-        fixed_assistant = _fix_first_line_indent(row["messages"][1]["content"])
+        # Re-indenta tutto il programma (commenti a col 1, 1ª riga, ecc.)
+        fixed_assistant = _fix_assistant(row["messages"][1]["content"])
         fixed_messages = [row["messages"][0], {"role": "assistant", "content": fixed_assistant}]
         prog = _extract_program(fixed_assistant)
         if not prog:
