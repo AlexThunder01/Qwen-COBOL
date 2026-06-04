@@ -25,7 +25,8 @@ sft:
   lora_dropout: 0.0
   bias: "none"
   max_seq_length: 2048              # 17k esempi median ~700 token — 2048 ok, batch più grande
-  num_train_epochs: 1               # 1 epoca = 1116 step; sessioni Lightning ~48 min
+  packing: true                     # impacchetta esempi corti → no padding sprecato → ~3x meno step
+  num_train_epochs: 1               # 1 epoca ≈ 380 step con packing
   per_device_train_batch_size: 4    # RTX PRO 6000 96GB → batch 4 con 27B QLoRA 4-bit
   gradient_accumulation_steps: 4   # effective batch = 16
   learning_rate: 2.0e-4

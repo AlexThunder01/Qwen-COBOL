@@ -150,6 +150,7 @@ def run_sft(config_path: str) -> None:
         report_to="wandb",
         max_seq_length=sft_cfg["max_seq_length"],
         dataset_text_field="text",
+        packing=sft_cfg.get("packing", False),
     )
 
     trainer = SFTTrainer(
