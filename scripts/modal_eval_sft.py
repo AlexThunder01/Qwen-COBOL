@@ -226,6 +226,10 @@ def run_eval(n_problems: int | None = None, use_lora: bool = True, think: bool =
     for i, (prob, response) in enumerate(zip(problems, responses)):
         cobol = extract_cobol(response, prob["prompt"])
         full_program = swap_sections(cobol)
+        # Normalizzazione GOBACK: in un sottoprogramma COBOLEval, STOP RUN termina
+        # tutto il run (incl. il caller) → il file di output non viene scritto → test
+        # falliscono. GOBACK ritorna correttamente al caller. (W1: 0% → 10.27%)
+        full_program = re.sub(r"\bSTOP\s+RUN\b", "GOBACK", full_program, flags=re.IGNORECASE)
 
         # DIAGNOSTICA: errore cobc diretto + dump primo programma
         cerr = direct_compile_err(full_program)
