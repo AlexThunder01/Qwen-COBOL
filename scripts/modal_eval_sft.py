@@ -82,7 +82,9 @@ def extract_cobol(response: str, prompt: str) -> str:
     corretta. NON innestare sul prompt (creava duplicati + righe a colonna 1).
     swap_sections riordina le sezioni; il formato indentato regge in fixed/variable.
     """
-    blocks = re.findall(r"```(?:cobol)?\s*\n?(.*?)```", response, re.DOTALL | re.IGNORECASE)
+    # [ \t]*\r?\n consuma solo la fine della riga ```cobol, NON l'indentazione
+    # della prima riga di codice (cruciale per il formato a colonne COBOL).
+    blocks = re.findall(r"```(?:cobol)?[ \t]*\r?\n(.*?)```", response, re.DOTALL | re.IGNORECASE)
 
     # Programma completo: blocco con IDENTIFICATION + PROCEDURE DIVISION, il più lungo
     complete = [
