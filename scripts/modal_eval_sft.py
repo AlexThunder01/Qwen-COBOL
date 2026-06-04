@@ -115,7 +115,7 @@ def extract_cobol(response: str, prompt: str) -> str:
     volumes={"/models": model_vol},
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
-def run_eval(n_problems: int | None = None) -> dict:
+def run_eval(n_problems: int | None = None, use_lora: bool = True) -> dict:
     import os
     import shutil
     import sys
@@ -155,24 +155,26 @@ def run_eval(n_problems: int | None = None) -> dict:
     sys.path.insert(0, f"{COBOLEVAL_DIR}/scripts")
     from evaluation import check_correctness  # noqa: E402
 
-    # ── Scarica adapter LoRA in locale ───────────────────────────────────────
-    print(f"Scarico adapter {SFT_ADAPTER} …")
-    adapter_path = snapshot_download(repo_id=SFT_ADAPTER, cache_dir="/models/adapters")
-    print(f"Adapter in {adapter_path}")
-
-    # ── Carica base model + LoRA via vLLM ────────────────────────────────────
     from vllm import LLM, SamplingParams
-    from vllm.lora.request import LoRARequest
     from transformers import AutoTokenizer
 
-    print(f"Carico {BASE_MODEL} con LoRA abilitato …")
+    lora_req = None
+    if use_lora:
+        from vllm.lora.request import LoRARequest
+        print(f"Scarico adapter {SFT_ADAPTER} …")
+        adapter_path = snapshot_download(repo_id=SFT_ADAPTER, cache_dir="/models/adapters")
+        print(f"Adapter in {adapter_path}")
+        lora_req = LoRARequest("cobol-sft", 1, adapter_path)
+
+    mode = "base + LoRA SFT" if use_lora else "VANILLA instruct (no LoRA)"
+    print(f"Carico {BASE_MODEL} — {mode} …")
     llm = LLM(
         model=BASE_MODEL,
         download_dir="/models",
         dtype="bfloat16",
         max_model_len=8192,
         gpu_memory_utilization=0.92,
-        enable_lora=True,
+        enable_lora=use_lora,
         max_lora_rank=64,
     )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
@@ -183,7 +185,6 @@ def run_eval(n_problems: int | None = None) -> dict:
         max_tokens=4096,
         stop=["<|user|>", "<|assistant|>", "<|im_end|>", "<|im_start|>", "<|endoftext|>"],
     )
-    lora_req = LoRARequest("cobol-sft", 1, adapter_path)
 
     # ── Costruisci prompt chat-formatted ─────────────────────────────────────
     chat_prompts = []
@@ -196,8 +197,9 @@ def run_eval(n_problems: int | None = None) -> dict:
         )
         chat_prompts.append(text)
 
-    print(f"Genero completions (chat + LoRA) per {len(problems)} problemi …")
-    outputs = llm.generate(chat_prompts, sampling, lora_request=lora_req)
+    print(f"Genero completions ({mode}) per {len(problems)} problemi …")
+    gen_kwargs = {"lora_request": lora_req} if lora_req else {}
+    outputs = llm.generate(chat_prompts, sampling, **gen_kwargs)
     responses = [o.outputs[0].text for o in outputs]
 
     # ── Valuta ───────────────────────────────────────────────────────────────
@@ -228,31 +230,35 @@ def run_eval(n_problems: int | None = None) -> dict:
 
     n_pass = sum(1 for r in results if r["passed"])
     n = len(problems)
+    label = "base + LoRA SFT" if use_lora else "VANILLA instruct chat"
     summary = {
-        "model": f"{BASE_MODEL} + {SFT_ADAPTER}",
+        "model": f"{BASE_MODEL}" + (f" + {SFT_ADAPTER}" if use_lora else " (vanilla chat)"),
+        "mode": label,
         "n_problems": n,
         "compile_rate": round(n_compile / n, 4),
         "pass_at_1": round(n_pass / n, 4),
         "n_compile": n_compile,
         "n_pass": n_pass,
-        "baseline": {"compile_rate": 0.3288, "pass_at_1_raw": 0.0, "pass_at_1_goback": 0.1027},
+        "w1_baseline_raw": {"compile_rate": 0.3288, "pass_at_1_raw": 0.0, "pass_at_1_goback": 0.1027},
         "sota": {"compile_rate": SOTA_COMPILE, "pass_at_1": SOTA_PASS1, "model": "COBOL-Coder"},
         "results": results,
     }
 
     print(f"\n{'='*54}")
-    print(f"Modello:      SFT (step 300)")
-    print(f"Compile rate: {summary['compile_rate']*100:.1f}%  (baseline 32.88%, SOTA 73.95%)")
-    print(f"Pass@1:       {summary['pass_at_1']*100:.2f}%  (baseline 0%/10.27%, SOTA 49.33%)")
+    print(f"Modello:      {label}")
+    print(f"Compile rate: {summary['compile_rate']*100:.1f}%  (SOTA 73.95%)")
+    print(f"Pass@1:       {summary['pass_at_1']*100:.2f}%  (SOTA 49.33%)")
     print(f"{'='*54}")
     return summary
 
 
 @app.local_entrypoint()
-def main(quick: bool = False, n_problems: int = 0):
+def main(quick: bool = False, n_problems: int = 0, vanilla: bool = False):
+    """--vanilla: instruct puro senza LoRA (vero baseline chat-mode)."""
     n = 10 if quick else (n_problems or None)
-    result = run_eval.remote(n_problems=n)
-    out_path = Path("results/sft_step300_qwen36_27b.json")
+    result = run_eval.remote(n_problems=n, use_lora=not vanilla)
+    name = "vanilla_chat" if vanilla else "sft_step300"
+    out_path = Path(f"results/{name}_qwen36_27b.json")
     out_path.parent.mkdir(exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
