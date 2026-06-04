@@ -55,7 +55,8 @@ logger = logging.getLogger(__name__)
 DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 SFT_REPO = "AlexThunder0/cobol-sft-dataset"
 SPLIT = "generate_spec"
-PUSH_EVERY = 50
+PUSH_EVERY = 20      # salva prima
+CONCURRENCY = 5      # chiamate parallele per batch
 
 # Teacher frontier in riserva — tutti battono lo student Qwen3.6-27B
 TEACHER_MODELS = [
@@ -178,7 +179,44 @@ def push(examples: list[dict]) -> None:
     )
 
 
+def gen_one(client, model: str) -> tuple[dict | None, str]:
+    """Genera UN esempio. Ritorna (esempio|None, esito) per la cascata.
+    esito ∈ {"ok", "quota", "parse", "other"}."""
+    topic = random.choice(TOPICS)
+    difficulty = random.choice(DIFFICULTIES)
+    user = USER_TEMPLATE.format(topic=topic, difficulty=difficulty)
+    try:
+        extra = {}
+        if "thinking" in model or "qwq" in model:
+            extra = {"extra_body": {"enable_thinking": True}}
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=2048,
+            temperature=0.85,
+            **extra,
+        )
+        text = resp.choices[0].message.content or ""
+    except Exception as e:
+        msg = str(e)
+        if any(k in msg for k in ("FreeTierOnly", "exhausted", "429", "403")):
+            return None, "quota"
+        return None, "other"
+
+    parsed = parse_response(text)
+    if not parsed:
+        return None, "parse"
+    approach, program = parsed
+    ex = build_example(approach, program, model)
+    return (ex, "ok") if ex else (None, "parse")
+
+
 def main(target: int) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
     client = get_client()
 
     # Resume da HF
@@ -196,65 +234,37 @@ def main(target: int) -> None:
 
     new_since_push = 0
     model_idx = 0
-    consecutive_failures = 0
     random.seed(13)
 
-    while len(accumulated) < target:
-        model = TEACHER_MODELS[model_idx % len(TEACHER_MODELS)]
-        topic = random.choice(TOPICS)
-        difficulty = random.choice(DIFFICULTIES)
-        user = USER_TEMPLATE.format(topic=topic, difficulty=difficulty)
+    # Batch concorrenti: CONCURRENCY chiamate parallele, poi push se serve.
+    # Tra un batch e l'altro nessun thread attivo → push sicuro, no lock.
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        while len(accumulated) < target and model_idx < len(TEACHER_MODELS):
+            model = TEACHER_MODELS[model_idx]
+            futures = [pool.submit(gen_one, client, model) for _ in range(CONCURRENCY)]
 
-        try:
-            extra = {}
-            if "thinking" in model or "qwq" in model:
-                extra = {"extra_body": {"enable_thinking": True}}
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=2048,
-                temperature=0.85,  # alta per diversità dei task
-                **extra,
-            )
-            text = resp.choices[0].message.content or ""
-            consecutive_failures = 0
-        except Exception as e:
-            msg = str(e)
-            if "FreeTierOnly" in msg or "exhausted" in msg or "429" in msg or "403" in msg:
-                consecutive_failures += 1
-                if consecutive_failures >= 8:
-                    logger.warning("Modello %s esaurito → passo al prossimo", model)
-                    model_idx += 1
-                    consecutive_failures = 0
-                    if model_idx >= len(TEACHER_MODELS):
-                        logger.warning("Tutti i modelli esauriti — stop")
-                        break
-                continue
-            logger.warning("Errore (%s): %s", model, msg[:120])
-            time.sleep(1)
-            continue
+            quota_hits = 0
+            for fut in futures:
+                ex, esito = fut.result()
+                if ex:
+                    accumulated.append(ex)
+                    new_since_push += 1
+                elif esito == "quota":
+                    quota_hits += 1
 
-        parsed = parse_response(text)
-        if not parsed:
-            continue
-        approach, program = parsed
-        ex = build_example(approach, program, model)
-        if not ex:
-            continue
+            if new_since_push >= PUSH_EVERY:
+                push(accumulated)
+                logger.info("Checkpoint: %d/%d su HF (model: %s)", len(accumulated), target, model)
+                new_since_push = 0
 
-        accumulated.append(ex)
-        new_since_push += 1
-        time.sleep(0.5)
-
-        if new_since_push >= PUSH_EVERY:
-            push(accumulated)
-            logger.info("Checkpoint: %d/%d su HF Hub (model corrente: %s)", len(accumulated), target, model)
-            new_since_push = 0
+            # Intero batch in quota → modello esaurito, passa al prossimo
+            if quota_hits >= CONCURRENCY:
+                logger.warning("Modello %s esaurito → prossimo", model)
+                model_idx += 1
 
     push(accumulated)
+    if model_idx >= len(TEACHER_MODELS):
+        logger.warning("Tutti i modelli esauriti.")
     logger.info("Generate-from-spec completato: %d esempi", len(accumulated))
 
 
