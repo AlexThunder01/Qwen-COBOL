@@ -33,12 +33,16 @@ app = modal.App("qwen-cobol-validate-spec", image=image)
 SFT_REPO = "AlexThunder0/cobol-sft-dataset"
 SRC_SPLIT = "generate_spec"
 DST_SPLIT = "generate_spec_valid"
-FAIL_SPLIT = "generate_spec_failed"  # non-compilanti + errore cobc (diagnostica + auto-fix)
+# Repo SEPARATO per i falliti: hanno il campo extra `compile_error` che romperebbe
+# lo schema degli altri split di SFT_REPO. (diagnostica + auto-fix futuro)
+FAIL_REPO = "AlexThunder0/cobol-spec-failed"
 
 
 def _extract_program(assistant: str) -> str | None:
-    m = re.search(r"```(?:cobol)?\s*\n?(.*?)```", assistant, re.DOTALL | re.IGNORECASE)
-    return m.group(1).strip() if m else None
+    # [ \t]*\r?\n consuma solo la fine della riga ```cobol, NON l'indentazione
+    # della prima riga (cruciale per il formato a colonne COBOL).
+    m = re.search(r"```(?:cobol)?[ \t]*\r?\n(.*?)```", assistant, re.DOTALL | re.IGNORECASE)
+    return m.group(1).strip("\n") if m else None
 
 
 @app.function(timeout=3600, secrets=[modal.Secret.from_name("huggingface-secret")])
@@ -123,9 +127,9 @@ def validate() -> dict:
             "compile_error": Value("string"),
         })
         Dataset.from_list(failed, features=fail_feats).push_to_hub(
-            SFT_REPO, split=FAIL_SPLIT, private=True, token=token
+            FAIL_REPO, split="train", private=True, token=token
         )
-        print(f"Pushati {n_bad} falliti (con errore) → {FAIL_SPLIT}")
+        print(f"Pushati {n_bad} falliti (con errore) → {FAIL_REPO}")
 
         # Sintesi pattern di errore più comuni (prima riga utile di cobc)
         from collections import Counter
