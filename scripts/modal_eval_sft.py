@@ -1,0 +1,230 @@
+"""
+Modal eval — Qwen3.6-27B + SFT LoRA adapter su COBOLEval.
+
+Differenze vs baseline (modal_eval.py):
+  - Carica l'adapter LoRA `AlexThunder0/qwen-cobol-27b-sft` a runtime (vLLM enable_lora)
+  - Usa il formato CHAT (il modello SFT è instruction-tuned, non base)
+  - Estrae il COBOL dalla risposta dell'assistant (gestisce ```cobol fences)
+
+Confronto target: baseline W1 (32.88% compile, 0% Pass@1 raw, 10.27% GOBACK-norm).
+
+Usage:
+  python -m modal run scripts/modal_eval_sft.py            # full 164
+  python -m modal run scripts/modal_eval_sft.py --quick    # 10 problemi
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+import modal
+
+image = (
+    modal.Image.from_registry("python:3.11-slim-trixie")
+    .apt_install("git", "gnucobol")
+    .pip_install("vllm>=0.8.0", "transformers>=4.50", "huggingface_hub>=0.26")
+    .env({"VLLM_USE_FLASHINFER_SAMPLER": "0"})
+)
+
+app = modal.App("qwen-cobol-sft-eval", image=image)
+model_vol = modal.Volume.from_name("qwen-cobol-model-cache", create_if_missing=True)
+
+BASE_MODEL = "Qwen/Qwen3.6-27B"
+SFT_ADAPTER = "AlexThunder0/qwen-cobol-27b-sft"
+COBOLEVAL_REPO = "https://github.com/BloopAI/COBOLEval.git"
+COBOLEVAL_DIR = "/coboleval"
+COBOLEVAL_COMMIT = "0bb96c3114bb2bb28e221e9d6000614781f8609d"
+
+SOTA_COMPILE = 0.7395
+SOTA_PASS1 = 0.4933
+
+# Istruzione che wrappa lo scheletro COBOLEval come task di completamento
+INSTRUCTION = (
+    "Complete the following COBOL program by implementing the PROCEDURE DIVISION. "
+    "Return the complete, compilable COBOL program.\n\n```cobol\n{prompt}\n```"
+)
+
+
+def swap_sections(src: str) -> str:
+    """begin → working_storage → linkage → procedure (identica a modal_eval.py)."""
+    working_storage, linkage, procedure, begin = [], [], [], []
+    current_section = begin
+    for line in src.split("\n"):
+        stripped = line.strip().upper()
+        if stripped.startswith("WORKING-STORAGE SECTION."):
+            current_section = working_storage
+        elif stripped.startswith("LINKAGE SECTION."):
+            current_section = linkage
+        elif stripped.startswith("PROCEDURE DIVISION"):
+            current_section = procedure
+            line = "       PROCEDURE DIVISION USING LINKED-ITEMS."
+        current_section.append(line)
+    return "\n".join(begin + working_storage + linkage + procedure)
+
+
+def extract_cobol(response: str, prompt: str) -> str:
+    """
+    Estrae il programma COBOL dalla risposta dell'assistant.
+    Casi gestiti:
+      - risposta con ```cobol ... ``` → prende il blocco
+      - risposta che è già un programma intero (ha IDENTIFICATION DIVISION)
+      - risposta che è solo la completion (PROCEDURE DIVISION) → concatena al prompt
+    """
+    # 1. Estrai blocco fenced se presente
+    m = re.search(r"```(?:cobol)?\s*\n(.*?)```", response, re.DOTALL | re.IGNORECASE)
+    code = m.group(1).strip() if m else response.strip()
+
+    # 2. Se il codice contiene già IDENTIFICATION DIVISION → è un programma intero
+    if re.search(r"IDENTIFICATION\s+DIVISION", code, re.IGNORECASE):
+        return code
+
+    # 3. Altrimenti è una completion parziale → concatena allo scheletro del prompt
+    return prompt + "\n" + code
+
+
+@app.function(
+    gpu="A100-80GB",
+    timeout=3600,
+    volumes={"/models": model_vol},
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
+def run_eval(n_problems: int | None = None) -> dict:
+    import os
+    import shutil
+    import sys
+
+    from huggingface_hub import snapshot_download
+
+    # ── Clone + patch COBOLEval (identico a baseline) ────────────────────────
+    shutil.rmtree(COBOLEVAL_DIR, ignore_errors=True)
+    subprocess.run(["git", "clone", "--quiet", COBOLEVAL_REPO, COBOLEVAL_DIR], check=True)
+    subprocess.run(["git", "checkout", "--quiet", COBOLEVAL_COMMIT], cwd=COBOLEVAL_DIR, check=True)
+
+    eval_py = Path(COBOLEVAL_DIR) / "scripts" / "evaluation.py"
+    src = eval_py.read_text()
+    patched = src.replace(
+        '    # if not cmd(f"./call_{name}"):\n'
+        '    #     logger.warning(f"Runtime error for {path}")\n'
+        '    #     return False\n',
+        '    if not cmd(f"./call_{name}"):\n'
+        '        logger.warning(f"Runtime error for {path}")\n'
+        '        return False\n',
+    )
+    assert patched != src, "Patch evaluation.py fallito"
+    eval_py.write_text(patched)
+    os.chdir(COBOLEVAL_DIR)
+
+    jsonl_path = Path(COBOLEVAL_DIR) / "data" / "CobolEval.jsonl"
+    problems = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                problems.append(json.loads(line))
+    if n_problems:
+        problems = problems[:n_problems]
+    print(f"Problemi caricati: {len(problems)}")
+
+    sys.path.insert(0, f"{COBOLEVAL_DIR}/scripts")
+    from evaluation import check_correctness  # noqa: E402
+
+    # ── Scarica adapter LoRA in locale ───────────────────────────────────────
+    print(f"Scarico adapter {SFT_ADAPTER} …")
+    adapter_path = snapshot_download(repo_id=SFT_ADAPTER, cache_dir="/models/adapters")
+    print(f"Adapter in {adapter_path}")
+
+    # ── Carica base model + LoRA via vLLM ────────────────────────────────────
+    from vllm import LLM, SamplingParams
+    from vllm.lora.request import LoRARequest
+    from transformers import AutoTokenizer
+
+    print(f"Carico {BASE_MODEL} con LoRA abilitato …")
+    llm = LLM(
+        model=BASE_MODEL,
+        download_dir="/models",
+        dtype="bfloat16",
+        max_model_len=8192,
+        gpu_memory_utilization=0.92,
+        enable_lora=True,
+        max_lora_rank=64,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    sampling = SamplingParams(temperature=0.0, max_tokens=2048)
+    lora_req = LoRARequest("cobol-sft", 1, adapter_path)
+
+    # ── Costruisci prompt chat-formatted ─────────────────────────────────────
+    chat_prompts = []
+    for p in problems:
+        user_msg = INSTRUCTION.format(prompt=p["prompt"])
+        text = tokenizer.apply_chat_template(
+            [{"role": "user", "content": user_msg}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        chat_prompts.append(text)
+
+    print(f"Genero completions (chat + LoRA) per {len(problems)} problemi …")
+    outputs = llm.generate(chat_prompts, sampling, lora_request=lora_req)
+    responses = [o.outputs[0].text for o in outputs]
+
+    # ── Valuta ───────────────────────────────────────────────────────────────
+    results = []
+    n_compile = 0
+    for prob, response in zip(problems, responses):
+        cobol = extract_cobol(response, prob["prompt"])
+        full_program = swap_sections(cobol)
+
+        compiles = passed = False
+        try:
+            r = check_correctness(prob, full_program, COBOLEVAL_DIR)
+            compiled_list = r.get("compiled", [])
+            compiles = bool(compiled_list) and all(compiled_list)
+            passed = bool(r.get("all_passed", False))
+        except Exception as e:
+            print(f"  ⚠️  {prob['task_id']}: {type(e).__name__}: {e}")
+        if compiles:
+            n_compile += 1
+        status = "PASS" if passed else ("COMPILE" if compiles else "FAIL")
+        print(f"  {prob['task_id']:30s}  {status}")
+        results.append({
+            "task_id": prob["task_id"],
+            "compiles": compiles,
+            "passed": passed,
+            "response": response,
+        })
+
+    n_pass = sum(1 for r in results if r["passed"])
+    n = len(problems)
+    summary = {
+        "model": f"{BASE_MODEL} + {SFT_ADAPTER}",
+        "n_problems": n,
+        "compile_rate": round(n_compile / n, 4),
+        "pass_at_1": round(n_pass / n, 4),
+        "n_compile": n_compile,
+        "n_pass": n_pass,
+        "baseline": {"compile_rate": 0.3288, "pass_at_1_raw": 0.0, "pass_at_1_goback": 0.1027},
+        "sota": {"compile_rate": SOTA_COMPILE, "pass_at_1": SOTA_PASS1, "model": "COBOL-Coder"},
+        "results": results,
+    }
+
+    print(f"\n{'='*54}")
+    print(f"Modello:      SFT (step 300)")
+    print(f"Compile rate: {summary['compile_rate']*100:.1f}%  (baseline 32.88%, SOTA 73.95%)")
+    print(f"Pass@1:       {summary['pass_at_1']*100:.2f}%  (baseline 0%/10.27%, SOTA 49.33%)")
+    print(f"{'='*54}")
+    return summary
+
+
+@app.local_entrypoint()
+def main(quick: bool = False, n_problems: int = 0):
+    n = 10 if quick else (n_problems or None)
+    result = run_eval.remote(n_problems=n)
+    out_path = Path("results/sft_step300_qwen36_27b.json")
+    out_path.parent.mkdir(exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"\nRisultati salvati in {out_path}")
