@@ -200,11 +200,35 @@ def run_eval(n_problems: int | None = None, use_lora: bool = True, think: bool =
     responses = [o.outputs[0].text for o in outputs]
 
     # ── Valuta ───────────────────────────────────────────────────────────────
+    import tempfile as _tmp
+    def direct_compile_err(code: str) -> str:
+        with _tmp.NamedTemporaryFile(suffix=".cob", mode="w", delete=False, dir="/tmp") as tf:
+            tf.write(code)
+            tp = tf.name
+        try:
+            cp = subprocess.run(["cobc", "-w", "-fformat=variable", "-c", tp],
+                                capture_output=True, text=True, timeout=15, cwd="/tmp")
+            return "" if cp.returncode == 0 else cp.stderr[:600]
+        except Exception as e:
+            return f"exc: {e}"
+
     results = []
     n_compile = 0
-    for prob, response in zip(problems, responses):
+    for i, (prob, response) in enumerate(zip(problems, responses)):
         cobol = extract_cobol(response, prob["prompt"])
         full_program = swap_sections(cobol)
+
+        # DIAGNOSTICA: errore cobc diretto + dump primo programma
+        cerr = direct_compile_err(full_program)
+        if i == 0:
+            print("\n===== DIAGNOSTICA problema 0 =====")
+            print("--- PROMPT (ultimi 300 char) ---")
+            print(prob["prompt"][-300:])
+            print("--- FULL_PROGRAM dopo swap (primi 900 char) ---")
+            print(full_program[:900])
+            print("--- COBC ERROR ---")
+            print(cerr or "(compila!)")
+            print("===== /diagnostica =====\n")
 
         compiles = passed = False
         try:
@@ -217,11 +241,12 @@ def run_eval(n_problems: int | None = None, use_lora: bool = True, think: bool =
         if compiles:
             n_compile += 1
         status = "PASS" if passed else ("COMPILE" if compiles else "FAIL")
-        print(f"  {prob['task_id']:30s}  {status}")
+        print(f"  {prob['task_id']:30s}  {status}  {('| '+cerr[:80]) if cerr and not compiles else ''}")
         results.append({
             "task_id": prob["task_id"],
             "compiles": compiles,
             "passed": passed,
+            "compile_error": cerr,
             "response": response,
         })
 
