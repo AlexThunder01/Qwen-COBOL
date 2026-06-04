@@ -75,41 +75,28 @@ def swap_sections(src: str) -> str:
 
 def extract_cobol(response: str, prompt: str) -> str:
     """
-    Estrae il programma COBOL dalla risposta, robusto al thinking verboso.
-    Priorità:
-      1. blocco fenced (ultimo) che contiene IDENTIFICATION DIVISION → programma intero
-      2. blocco fenced (ultimo) con PROCEDURE DIVISION → completion, concatena al prompt
-      3. slice dal primo IDENTIFICATION DIVISION fino a fine (no fences)
-      4. fallback: prompt + risposta intera
+    Estrae SOLO il completamento (WORKING-STORAGE + PROCEDURE DIVISION) dal codice
+    del modello e lo INNESTA sul prompt originale — come W1 (`prompt + completion`).
+
+    Cruciale: il prompt ha l'interfaccia ESATTA attesa dal caller COBOLEval
+    (PROGRAM-ID + LINKAGE corretti). Usare il programma INTERO rigenerato dal modello
+    rompe il linking. Innestiamo solo la parte mancante e swap_sections riordina.
     """
+    # Codice del modello: blocco fenced più lungo, altrimenti risposta grezza
     blocks = re.findall(r"```(?:cobol)?\s*\n?(.*?)```", response, re.DOTALL | re.IGNORECASE)
+    code = max(blocks, key=len).strip() if blocks else response.strip()
 
-    # 1. Programmi COMPLETI (IDENTIFICATION + PROCEDURE DIVISION) → prendi il più
-    #    completo (più lungo). Robusto al rambling con blocchi parziali multipli.
-    complete = [
-        b.strip() for b in blocks
-        if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE)
-        and re.search(r"PROCEDURE\s+DIVISION", b, re.IGNORECASE)
-    ]
-    if complete:
-        return max(complete, key=len)
+    # Prendi dal WORKING-STORAGE SECTION in poi (il completamento aggiunto dal modello).
+    # Se non c'è WS, dal PROCEDURE DIVISION in poi.
+    m = re.search(r"(WORKING-STORAGE\s+SECTION\..*)", code, re.DOTALL | re.IGNORECASE)
+    if not m:
+        m = re.search(r"(PROCEDURE\s+DIVISION.*)", code, re.DOTALL | re.IGNORECASE)
+    completion = m.group(1).strip() if m else code
 
-    # 2. Blocco con almeno IDENTIFICATION DIVISION
-    for b in reversed(blocks):
-        if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE):
-            return b.strip()
+    # Taglia eventuali marker di turno residui
+    completion = re.split(r"<\|", completion)[0].strip()
 
-    # 3. Solo completion (PROCEDURE DIVISION) → concatena
-    for b in reversed(blocks):
-        if re.search(r"PROCEDURE\s+DIVISION", b, re.IGNORECASE):
-            return prompt + "\n" + b.strip()
-
-    # 4. Nessun fence: slice da IDENTIFICATION DIVISION fino al primo marker di turno
-    m = re.search(r"(IDENTIFICATION\s+DIVISION.*)", response, re.DOTALL | re.IGNORECASE)
-    if m:
-        return re.split(r"<\|", m.group(1))[0].strip()
-
-    return prompt + "\n" + response.strip()
+    return prompt + "\n" + completion
 
 
 @app.function(
