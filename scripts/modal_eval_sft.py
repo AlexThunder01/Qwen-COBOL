@@ -81,22 +81,31 @@ def extract_cobol(response: str, prompt: str) -> str:
     """
     blocks = re.findall(r"```(?:cobol)?\s*\n?(.*?)```", response, re.DOTALL | re.IGNORECASE)
 
-    # 1. Programma intero in un blocco (preferisci l'ultimo = risposta finale)
+    # 1. Programmi COMPLETI (IDENTIFICATION + PROCEDURE DIVISION) → prendi il più
+    #    completo (più lungo). Robusto al rambling con blocchi parziali multipli.
+    complete = [
+        b.strip() for b in blocks
+        if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE)
+        and re.search(r"PROCEDURE\s+DIVISION", b, re.IGNORECASE)
+    ]
+    if complete:
+        return max(complete, key=len)
+
+    # 2. Blocco con almeno IDENTIFICATION DIVISION
     for b in reversed(blocks):
         if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE):
             return b.strip()
 
-    # 2. Solo completion (PROCEDURE DIVISION) in un blocco → concatena
+    # 3. Solo completion (PROCEDURE DIVISION) → concatena
     for b in reversed(blocks):
         if re.search(r"PROCEDURE\s+DIVISION", b, re.IGNORECASE):
             return prompt + "\n" + b.strip()
 
-    # 3. Nessun fence: slice dal primo IDENTIFICATION DIVISION
+    # 4. Nessun fence: slice da IDENTIFICATION DIVISION fino al primo marker di turno
     m = re.search(r"(IDENTIFICATION\s+DIVISION.*)", response, re.DOTALL | re.IGNORECASE)
     if m:
-        return m.group(1).strip()
+        return re.split(r"<\|", m.group(1))[0].strip()
 
-    # 4. Completion grezza senza struttura → concatena
     return prompt + "\n" + response.strip()
 
 
@@ -167,8 +176,13 @@ def run_eval(n_problems: int | None = None) -> dict:
         max_lora_rank=64,
     )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-    # max_tokens alto: il thinking verboso + il programma devono starci entrambi
-    sampling = SamplingParams(temperature=0.0, max_tokens=4096)
+    # Stop sequences: il checkpoint a 300 step allucina turni falsi (<|user|> ecc).
+    # Le fermiamo per evitare rambling e output incoerente.
+    sampling = SamplingParams(
+        temperature=0.0,
+        max_tokens=4096,
+        stop=["<|user|>", "<|assistant|>", "<|im_end|>", "<|im_start|>", "<|endoftext|>"],
+    )
     lora_req = LoRARequest("cobol-sft", 1, adapter_path)
 
     # ── Costruisci prompt chat-formatted ─────────────────────────────────────
