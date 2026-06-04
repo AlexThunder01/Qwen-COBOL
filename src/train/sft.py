@@ -89,6 +89,12 @@ def run_sft(config_path: str) -> None:
     if sft_cfg.get("curriculum"):
         logger.info("Curriculum ordering per difficulty_score …")
         dataset = build_curriculum(dataset)
+    else:
+        # SHUFFLE: senza curriculum, mischia per evitare bias da ordine
+        # (concatenazione = mainframebench → teacher_bulk → alibaba_gold).
+        # Cruciale se la run viene interrotta: il parziale resta rappresentativo.
+        logger.info("Shuffle del dataset (no curriculum) …")
+        dataset = dataset.shuffle(seed=42)
 
     # ── Rendering ChatML → colonna `text` ────────────────────────────────────
     # Usa il chat template del tokenizer se presente, altrimenti ChatML manuale
