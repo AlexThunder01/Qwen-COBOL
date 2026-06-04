@@ -75,28 +75,35 @@ def swap_sections(src: str) -> str:
 
 def extract_cobol(response: str, prompt: str) -> str:
     """
-    Estrae SOLO il completamento (WORKING-STORAGE + PROCEDURE DIVISION) dal codice
-    del modello e lo INNESTA sul prompt originale — come W1 (`prompt + completion`).
+    Estrae il programma COBOL INTERO dal blocco ```cobol del modello.
 
-    Cruciale: il prompt ha l'interfaccia ESATTA attesa dal caller COBOLEval
-    (PROGRAM-ID + LINKAGE corretti). Usare il programma INTERO rigenerato dal modello
-    rompe il linking. Innestiamo solo la parte mancante e swap_sections riordina.
+    Il modello in chat mode genera già un programma completo, indentato in area B
+    (7 spazi) e con PROGRAM-ID + LINKAGE copiati fedelmente dal prompt → interfaccia
+    corretta. NON innestare sul prompt (creava duplicati + righe a colonna 1).
+    swap_sections riordina le sezioni; il formato indentato regge in fixed/variable.
     """
-    # Codice del modello: blocco fenced più lungo, altrimenti risposta grezza
     blocks = re.findall(r"```(?:cobol)?\s*\n?(.*?)```", response, re.DOTALL | re.IGNORECASE)
-    code = max(blocks, key=len).strip() if blocks else response.strip()
 
-    # Prendi dal WORKING-STORAGE SECTION in poi (il completamento aggiunto dal modello).
-    # Se non c'è WS, dal PROCEDURE DIVISION in poi.
-    m = re.search(r"(WORKING-STORAGE\s+SECTION\..*)", code, re.DOTALL | re.IGNORECASE)
-    if not m:
-        m = re.search(r"(PROCEDURE\s+DIVISION.*)", code, re.DOTALL | re.IGNORECASE)
-    completion = m.group(1).strip() if m else code
+    # Programma completo: blocco con IDENTIFICATION + PROCEDURE DIVISION, il più lungo
+    complete = [
+        b.strip("\n") for b in blocks
+        if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE)
+        and re.search(r"PROCEDURE\s+DIVISION", b, re.IGNORECASE)
+    ]
+    if complete:
+        return max(complete, key=len)
 
-    # Taglia eventuali marker di turno residui
-    completion = re.split(r"<\|", completion)[0].strip()
+    # Fallback: blocco con IDENTIFICATION
+    for b in reversed(blocks):
+        if re.search(r"IDENTIFICATION\s+DIVISION", b, re.IGNORECASE):
+            return b.strip("\n")
 
-    return prompt + "\n" + completion
+    # Fallback: slice da IDENTIFICATION nella risposta grezza
+    m = re.search(r"(^\s*IDENTIFICATION\s+DIVISION.*)", response, re.DOTALL | re.IGNORECASE | re.MULTILINE)
+    if m:
+        return re.split(r"<\|", m.group(1))[0].rstrip()
+
+    return prompt + "\n" + response.strip()
 
 
 @app.function(
