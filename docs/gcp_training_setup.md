@@ -55,14 +55,34 @@ python scripts/train_sft.py --max-steps 30
 Controlla con `nvidia-smi` (altro terminale): bf16 27B ~ 60-70GB VRAM su 80GB.
 Loss che scende. Se OOM, abbassa `per_device_train_batch_size` a 2 nello script.
 
-## 5. Training pieno (1 epoca, bf16)
+## 5. Training pieno (1 epoca, bf16) — DENTRO tmux!
+
+**Sempre in `tmux`**: così se cade la connessione SSH (Roma→Iowa, capita spesso),
+il training continua sulla VM invece di morire.
 
 ```bash
+tmux new -s train          # crea sessione tmux
+export HF_TOKEN=hf_...      # (ri-settare dentro tmux)
 python scripts/train_sft.py
+# Stacca senza fermare: premi  Ctrl+B  poi  D
+# Riattacca più tardi:  tmux attach -t train
 ```
 
-Adapter pushato su HF `AlexThunder0/qwen-cobol-27b-sft` ogni 100 step + finale.
-Stima: ~400 step (con packing) su A100-80GB → ~1-2h.
+- Checkpoint LOCALE ogni 50 step (`save_total_limit=1` → no saturazione disco).
+- **Resume automatico**: se il processo crasha (VM viva), rilancia lo stesso comando →
+  riprende dal checkpoint. NON ricomincia da zero.
+- Adapter **finale** pushato su HF `AlexThunder0/qwen-cobol-27b-sft` (una volta sola,
+  niente bloat git-LFS).
+- Stima: ~400 step (packing) + DoRA su A100-80GB → ~1.5-2.5h.
+
+### Safety stack (cosa copre cosa)
+| Failure | Coperto da |
+|---|---|
+| Caduta SSH | **tmux** (il processo continua sulla VM) |
+| Crash processo / OOM | checkpoint locale + **resume** (rilancia, riprende) |
+| Stop manuale | resume |
+| Morte VM (raro, non-spot) | nessun backup HF mid-run → re-run 2h (accettabile) |
+| Deliverable | adapter finale su HF |
 
 ## 6. ⚠️ SPEGNI la VM appena finito (NON lasciarla accesa!)
 

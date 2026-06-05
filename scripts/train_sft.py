@@ -131,14 +131,12 @@ def main(max_steps: int, load_4bit: bool) -> None:
         weight_decay=0.01,
         bf16=True,
         logging_steps=10,
-        save_steps=50,          # checkpoint+push ogni 50 step (~max 50 step persi su crash)
-        save_total_limit=1,
+        save_steps=50,          # checkpoint LOCALE ogni 50 step (per resume)
+        save_total_limit=1,     # tiene solo l'ultimo → no saturazione disco VM
         optim="paged_adamw_8bit",
         report_to="none",
-        push_to_hub=True,
-        hub_model_id=ADAPTER_REPO,
-        hub_strategy="checkpoint",
-        hub_token=token,
+        push_to_hub=False,      # NO push checkpoint → evita bloat git-LFS su HF.
+                                # L'adapter finale è pushato una volta sola sotto.
     )
     trainer = Trainer(
         model=model, args=args, train_dataset=packed,
