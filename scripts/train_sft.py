@@ -29,7 +29,7 @@ import os
 import torch
 from transformers import (
     AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig,
-    Trainer, TrainingArguments, DataCollatorForLanguageModeling,
+    Trainer, TrainingArguments, DataCollatorForLanguageModeling, TrainerCallback,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset, concatenate_datasets, Dataset
@@ -42,6 +42,23 @@ SFT_REPO = "AlexThunder0/cobol-sft-dataset"
 ADAPTER_REPO = "AlexThunder0/qwen-cobol-27b-sft"
 SPLITS = ["mainframebench", "teacher_bulk", "alibaba_gold", "generate_spec_valid"]
 MAX_LEN = 2048
+HF_BACKUP_EVERY = 150  # push adapter su HF ogni N step (backup anti morte-VM, bloat modesto)
+
+
+class HFBackupCallback(TrainerCallback):
+    """Push periodico dell'adapter su HF — backup contro la morte della VM.
+    Pochi push (ogni HF_BACKUP_EVERY) → bloat git-LFS contenuto."""
+    def __init__(self, repo: str, token: str, every: int):
+        self.repo, self.token, self.every = repo, token, every
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if model is not None and state.global_step > 0 and state.global_step % self.every == 0:
+            try:
+                model.push_to_hub(self.repo, token=self.token,
+                                  commit_message=f"backup step {state.global_step}")
+                logger.info("Backup HF intermedio @ step %d", state.global_step)
+            except Exception as e:
+                logger.warning("Backup HF @ step %d fallito: %s", state.global_step, e)
 
 
 def main(max_steps: int, load_4bit: bool) -> None:
@@ -141,6 +158,7 @@ def main(max_steps: int, load_4bit: bool) -> None:
     trainer = Trainer(
         model=model, args=args, train_dataset=packed,
         data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
+        callbacks=[HFBackupCallback(ADAPTER_REPO, token, HF_BACKUP_EVERY)],
     )
     # Resume automatico: se esiste un checkpoint in output_dir (es. dopo un crash
     # con la VM ancora viva), riprende da lì invece di ricominciare da zero.
