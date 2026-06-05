@@ -1,9 +1,11 @@
 """
-SFT standalone — Qwen3.6-27B + LoRA + PACKING MANUALE.
+SFT standalone — Qwen3.6-27B + DoRA (r=128, rsLoRA) + PACKING MANUALE.
 Eseguibile su qualsiasi VM con GPU (GCP A100, ecc.). Niente Modal, niente unsloth.
 
+Adapter: DoRA (qualità > LoRA, vicino al full-FT) + rsLoRA + rango 128 → qualità
+massima robusta (abbiamo memoria/budget su A100-80GB). ~1.4x più lento di LoRA, ok.
 Default: bf16 (A100-80GB, ~54GB, qualità piena, niente tassa dequant).
-Fallback: --load-4bit (QLoRA, per A100-40GB).
+Fallback: --load-4bit (QDoRA, per A100-40GB).
 
 Pipeline:
   1. Carica tutti gli split SFT (mainframebench + teacher_bulk + alibaba_gold + generate_spec_valid)
@@ -86,10 +88,14 @@ def main(max_steps: int, load_4bit: bool) -> None:
                 len(all_ids), len(blocks), len(blocks) // 16)
 
     # ── Modello: bf16 (default, A100-80GB) o 4-bit (fallback A100-40GB) ───────
+    # DoRA (qualità > LoRA, vicino al full-FT) + rsLoRA (stabilizza rango alto) + r=128.
+    # Abbiamo memoria/budget (A100-80GB, €258) → puntiamo alla qualità massima robusta.
     lora_cfg = LoraConfig(
-        r=64, lora_alpha=128, lora_dropout=0.0, bias="none",
+        r=128, lora_alpha=256, lora_dropout=0.0, bias="none",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         task_type="CAUSAL_LM",
+        use_dora=True,
+        use_rslora=True,
     )
     if load_4bit:
         logger.info("Carico %s in 4-bit (QLoRA) …", BASE_MODEL)

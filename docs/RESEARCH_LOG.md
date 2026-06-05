@@ -145,7 +145,12 @@ dall'errore, ri-compilati, i recuperati rientrano. (Self-correction guidata dal 
 
 ### Setup finale (GCP)
 - `scripts/train_sft.py` standalone: **bf16** su A100-80GB (qualità piena, no tassa dequant),
-  fallback `--load-4bit` per A100-40GB. LoRA r=64, packing manuale, 1 epoca, push su HF.
+  fallback `--load-4bit` per A100-40GB. Packing manuale, 1 epoca, push su HF.
+- **Adapter: DoRA r=128 + rsLoRA** (scelto per qualità massima robusta, avendo memoria/budget
+  su A100-80GB). DoRA > LoRA (vicino al full-FT ai ranghi bassi); rsLoRA stabilizza il rango
+  alto. ~1.4x più lento di LoRA, accettabile. GaLore (full-param, ceiling più alto) scartato
+  per rischio implementativo dopo i molti bug infra — affidabilità > guadagno marginale su SFT.
+  NB: inizialmente DoRA→LoRA su Lightning per il budget; ripristinato DoRA ora che c'è margine.
 - Budget Modal esaurito (~$7) → training spostato su GCP €258.
 
 ## 6. Metodologia di eval e la SAGA del bug del harness (lezioni per il paper)
