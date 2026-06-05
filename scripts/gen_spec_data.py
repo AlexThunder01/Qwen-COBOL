@@ -58,13 +58,17 @@ SPLIT = "generate_spec"
 PUSH_EVERY = 20      # salva prima
 CONCURRENCY = 5      # chiamate parallele per batch
 
-# Teacher frontier in riserva — tutti battono lo student Qwen3.6-27B
+# Teacher frontier con quote separate — tutti ≥ student Qwen3.6-27B.
+# Diversità di famiglia (DeepSeek + GLM oltre a Qwen) → dati SFT più robusti.
 TEACHER_MODELS = [
-    "qwen3.7-max-preview",
-    "qwen3.7-plus",
-    "qwen3.6-plus",
-    "qwen3-max",
-    "qwen3.6-max-preview",
+    "deepseek-v4-pro",              # frontier coder, famiglia diversa
+    "qwen3-coder-next",             # code specialist Qwen
+    "glm-5.1",                      # frontier GLM, famiglia diversa
+    "qwen3.7-max",                  # flagship GA
+    "qwen3.7-max-2026-05-20",       # snapshot (quota separata)
+    "qwen3.7-max-2026-05-17",       # snapshot
+    "qwen3-coder-plus-2025-09-23",  # coder snapshot
+    "qwen3.7-plus-2026-05-26",      # plus snapshot
 ]
 
 # Domini algoritmici per diversità (NO problemi COBOLEval reali)
