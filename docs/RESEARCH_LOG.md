@@ -75,7 +75,12 @@ Dataset finale `cobol-sft-dataset`, ~18k esempi:
 | mainframebench | 7.052 | Fsoft-AIC/MainframeBench (umano, MIT) | explain, QA, MCQ |
 | teacher_bulk | 9.851 | XMAiNframe-instruct-10.5b (domain expert) | explain, refactor, translate, debug |
 | alibaba_gold | 946 | qwen3-coder-plus / 235b-thinking / max (frontier) | task difficili + reasoning |
-| generate_spec_valid | 198 (+auto-fix) | qwen3.7-max-preview ecc (frontier) | **generate-from-spec** (task COBOLEval) |
+| generate_spec_valid | 198 | qwen3.7-max-preview ecc (frontier) | **generate-from-spec** (task COBOLEval) |
+
+Nota generate-from-spec: 433 generati → 198 compile-validi (45.7%) dopo recupero formato
+(re-indentazione: 1ª riga + commenti `*` da col 1 a col 7). Il teacher frontier scrive COBOL
+con formato a colonne incoerente → tasso di compile-validità basso. Auto-fix loop tentato ma
+deprioritizzato (connessione Modal instabile sui run lunghi; recupero marginale su supplemento ~1%).
 
 ### Decisioni strategiche W3
 - **CPT saltato**: il bottleneck (W1) è comportamento/sintassi, non conoscenza sintattica
