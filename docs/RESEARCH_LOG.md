@@ -97,6 +97,32 @@ deprioritizzato (connessione Modal instabile sui run lunghi; recupero marginale 
 - **Alibaba DashScope come teacher**: 70M token free su ~70 modelli, inclusi frontier
   (qwen3.7-max, 235b-thinking) che battono lo student Qwen3.6-27B → distillazione valida.
 
+### Provenienza dati / teacher usati (per riproducibilità)
+
+**Teacher di distillazione, per split:**
+- `teacher_bulk` (9.851): **Fsoft-AIC/XMAiNframe-instruct-10.5b** (domain expert COBOL,
+  self-hosted via transformers su Modal A100).
+- `alibaba_gold` (946): cascata DashScope — `qwen3-coder-plus`, `qwen3-235b-a22b-thinking-2507`
+  (thinking), `qwen3-max`, `qwq-plus`.
+- `generate_spec` 1ª run (433): cascata DashScope — `qwen3.7-max-preview`, `qwen3.7-plus`,
+  `qwen3.6-plus`, `qwen3-max`, `qwen3.6-max-preview`.
+- `generate_spec` espansione (in corso): cascata multi-famiglia — **`deepseek-v4-pro`** (DeepSeek,
+  famiglia diversa), `qwen3-coder-next` (code specialist), **`glm-5.1`** (Zhipu GLM, famiglia
+  diversa), `qwen3.7-max` (+snapshot 2026-05-20/05-17), `qwen3-coder-plus-2025-09-23`,
+  `qwen3.7-plus-2026-05-26`. Diversità di famiglia (DeepSeek+GLM) per ridurre il bias Qwen-centrico.
+- `mainframebench` (7.052): NON distillato — esempi umani curati (Fsoft-AIC/MainframeBench, MIT).
+
+**Principio cascata**: si usano teacher ≥ student (Qwen3.6-27B, ~77% SWE-bench); ogni modello
+DashScope ha quota free separata (1M+1M token), si passa al successivo all'esaurimento.
+
+**Teacher SCARTATI (negative results, importanti per il paper):**
+- **Gemini 2.5/3/3.5-flash**: free tier = **20 RPD** (non 1500 come per le vecchie 1.5) →
+  inutilizzabile per volume. La 1.5-flash è deprecata.
+- **Gemma 4 31B / Gemini 3.1 Flash-Lite** (1500 RPD): scartati perché **più deboli dello
+  student** → un teacher inferiore degrada i dati (distillazione controproducente).
+- **XMainframe corpus 236M**: proprietario, NON pubblico (verificato). Usato solo il MODELLO
+  (XMAiNframe-10.5b) come teacher, non il corpus.
+
 ### Tecnica: generate-from-spec + compile-validation + auto-fix loop
 Gap diagnosticato: i dati erano tutti explain/refactor, ma COBOLEval testa generate-from-spec.
 Generati ~433 esempi (scheletro COBOL + spec → programma completo) con teacher frontier,
