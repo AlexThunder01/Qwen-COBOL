@@ -88,7 +88,19 @@ DIFFICULTIES = ["easy", "easy", "medium", "medium", "hard"]
 SYSTEM_PROMPT = (
     "You are an expert COBOL educator who creates original programming exercises "
     "in the style of coding benchmarks (HumanEval-like, but for COBOL subprograms). "
-    "Write code valid for GnuCOBOL 3.x in free-ish fixed format (area B indentation)."
+    "Write code that COMPILES with GnuCOBOL 3.x in FIXED format.\n\n"
+    "CRITICAL format & syntax rules (the most common compile errors to avoid):\n"
+    "- FIXED format: comment lines have '*' in column 7 (six spaces then '*'); "
+    "all code in area B (indent ~7 spaces). NEVER start a line at column 1.\n"
+    "- Keep every line <= 72 characters. For long statements, split across lines "
+    "(area B), do NOT exceed the margin.\n"
+    "- Intrinsic functions: use ONLY valid GnuCOBOL ones (FUNCTION INTEGER, FUNCTION MOD, "
+    "FUNCTION NUMVAL, FUNCTION REVERSE, FUNCTION UPPER-CASE...). NEVER 'FUNCTION INT'.\n"
+    "- PERFORM VARYING: FROM and BY take a single identifier or literal, NOT an "
+    "expression. Compute 'WS-I + 1' into a variable first if needed.\n"
+    "- Reference OCCURS/array items WITH a subscript, e.g. WS-ARR(WS-I).\n"
+    "- End the program with GOBACK (it is a subprogram), then 'END PROGRAM name.'.\n"
+    "- Boolean conditions: use IF ... AND/OR ... with full relational expressions."
 )
 
 USER_TEMPLATE = """\

@@ -51,9 +51,15 @@ Dei 41 programmi che compilano, **30 passano (~73%)**. Cioè: **quando il modell
 la logica è quasi sempre giusta. Il collo di bottiglia è la COMPILAZIONE (sintassi COBOL),
 non l'algoritmo.** → l'SFT deve insegnare a scrivere COBOL che *compila*.
 
-Errori di sintassi ricorrenti del modello: `PERFORM VARYING ... FROM X + 1` (espressione non
-valida nella FROM), `FUNCTION INT` (inesistente, è INTEGER), `EXIT PERFORM` fuori da inline
-PERFORM, free-format vs fixed-format.
+### Analisi dei fallimenti vanilla (105/146 non compilano) — pattern di errore
+Distribuzione esatta degli errori cobc (informa la strategia dati):
+- 22x `unexpected *` (formato commenti/colonne) · 12x `END PROGRAM` (strutturale)
+- 12x `continuation character expected` (righe > 72 char) · 11x `requires one subscript`
+  (array senza indice) · 10x `FUNCTION unknown` (es. FUNCTION INT inesistente)
+- 8x `+, expecting UNTIL` (espressione in PERFORM VARYING FROM) · vari minori
+→ ~34 formato + ~29 sintassi GnuCOBOL + ~15 strutturali. Tutti pattern *insegnabili* con
+esempi compile-validi. Il prompt di generate-from-spec è stato aggiornato per fare scrivere
+al teacher COBOL fixed-format che evita esattamente questi errori.
 
 ## 3. W2 — Corpus COBOL (per CPT)
 
