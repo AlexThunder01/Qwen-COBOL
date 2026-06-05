@@ -192,7 +192,49 @@ non ipotizzare.** Il vero baseline (20.55%) era nascosto da bug di misurazione.
 5. **The Stack v2 via Software Heritage S3** come fonte COBOL riproducibile (vs corpora
    proprietari come XMainframe-236M).
 
-## 9. Aperti / da fare
+## 9. Environment / Riproducibilità
+
+### Benchmark
+- **COBOLEval**: github.com/BloopAI/COBOLEval @ commit
+  `0bb96c3114bb2bb28e221e9d6000614781f8609d` (pinnato per riproducibilità).
+- 146 problemi (`data/CobolEval.jsonl`). Patch a `scripts/evaluation.py` per abilitare
+  l'esecuzione del binary (nel repo originale è commentata per security; container isolato).
+- **GnuCOBOL** 3.x (apt `gnucobol`, Debian trixie). Flag compile-check: `cobc -w -fformat=variable -c`.
+
+### Metodologia eval (modal_eval_sft.py)
+- Modello in **chat mode** (Qwen3.6-27B è instruct). `apply_chat_template` con
+  `enable_thinking` (False=output diretto, True=reasoning, max_tokens 2048/8192).
+- **swap_sections**: riordina begin→working_storage→linkage→procedure; forza
+  `PROCEDURE DIVISION USING LINKED-ITEMS.` (replica `scripts/generate.py` del paper COBOLEval).
+- **Estrazione**: regex `r"```(?:cobol)?[ \t]*\r?\n(.*?)```"` (preserva indentazione),
+  prende il blocco completo più lungo (IDENTIFICATION+PROCEDURE).
+- **GOBACK normalization**: `STOP RUN` → `GOBACK` (i sottoprogrammi devono ritornare al caller).
+- Sampling: `temperature=0.0` (greedy, deterministico). `gpu_memory_utilization=0.92`.
+
+### Stack software
+- Eval: `python:3.11-slim-trixie`, **vLLM 0.21.0** (img spec `>=0.8.0`), `transformers>=4.50`,
+  `huggingface_hub>=0.26`, env `VLLM_USE_FLASHINFER_SAMPLER=0`. GPU A100-80GB (Modal).
+- Training (`scripts/train_sft.py`): `torch`, `transformers>=4.51`, `peft>=0.13`,
+  `accelerate>=1.0`, `bitsandbytes>=0.44`, `datasets`. LoRA r=64, α=128, dropout=0,
+  target = tutti i proj (q,k,v,o,gate,up,down). Packing manuale a 2048 token.
+  batch 4 × grad-accum 4 = eff 16, lr 2e-4 cosine, warmup 0.05, 1 epoca, optim paged_adamw_8bit.
+  bf16 (A100-80GB) o 4-bit nf4 (A100-40GB).
+- Teacher self-hosted (XMAiNframe): `transformers` su Modal A100 (no vLLM per conflitto `aimv2`).
+- DashScope: endpoint `dashscope-intl.aliyuncs.com/compatible-mode/v1` (OpenAI-compatible).
+
+### Modelli e dati
+- Base/student: **Qwen/Qwen3.6-27B** (instruct, thinking-by-default, multimodale), bf16.
+- Corpus CPT: The Stack v2 (`bigcode/the-stack-v2-dedup`, config COBOL) + Software Heritage S3
+  (`s3://softwareheritage/content/{blob_id}`, account AWS) + X-COBOL.
+- Repo HF (privati): `AlexThunder0/cobol-cpt-corpus`, `cobol-sft-dataset`,
+  `cobol-spec-failed`, `qwen-cobol-27b-sft`.
+
+### Compute
+- Modal (eval, teacher inference): A100-80GB / H100, ~$0.000694/s A100.
+- GCP (training finale): A100-80GB, regione us-central1, Deep Learning VM `common-cu124`.
+- Kaggle (corpus ingest): CPU / 2×T4. Lightning (tentativi training): L40S, RTX PRO 6000.
+
+## 10. Aperti / da fare
 
 - [ ] Training SFT pieno (GCP A100-80GB, bf16, 1 epoca)
 - [ ] Eval SFT finale vs vanilla 20.55% e vs SOTA 49.33%
