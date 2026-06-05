@@ -131,7 +131,7 @@ def main(max_steps: int, load_4bit: bool) -> None:
         weight_decay=0.01,
         bf16=True,
         logging_steps=10,
-        save_steps=100,
+        save_steps=50,          # checkpoint+push ogni 50 step (~max 50 step persi su crash)
         save_total_limit=1,
         optim="paged_adamw_8bit",
         report_to="none",
@@ -144,8 +144,14 @@ def main(max_steps: int, load_4bit: bool) -> None:
         model=model, args=args, train_dataset=packed,
         data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
     )
-    logger.info("Training avviato (%d blocchi) …", len(packed))
-    trainer.train()
+    # Resume automatico: se esiste un checkpoint in output_dir (es. dopo un crash
+    # con la VM ancora viva), riprende da lì invece di ricominciare da zero.
+    import glob
+    ckpts = glob.glob(os.path.join(args.output_dir, "checkpoint-*"))
+    resume = bool(ckpts)
+    logger.info("Training avviato (%d blocchi)%s …", len(packed),
+                " — RESUME da checkpoint" if resume else "")
+    trainer.train(resume_from_checkpoint=resume)
 
     logger.info("Push adapter finale → %s", ADAPTER_REPO)
     model.push_to_hub(ADAPTER_REPO, token=token)
