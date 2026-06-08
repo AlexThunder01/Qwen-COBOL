@@ -48,14 +48,17 @@ def _reindent_program(prog: str) -> str:
     """
     out = []
     for line in prog.split("\n"):
-        if not line.strip():
+        s = line.strip()
+        if not s:
             out.append(line)
+        elif s.startswith("*"):
+            # COMMENTO: forza `*` a colonna 7 SEMPRE (anche se già indentato male).
+            # Era il bug principale: i commenti a col 8/11 venivano lasciati intatti.
+            out.append("      " + s)      # 6 spazi + "* ..." → * a colonna 7
         elif line[:1] in (" ", "\t"):
-            out.append(line)
-        elif line.lstrip().startswith("*"):
-            out.append("      " + line)   # 6 spazi → * a colonna 7
+            out.append(line)              # codice già indentato: lascia
         else:
-            out.append("       " + line)  # 7 spazi → codice a colonna 8
+            out.append("       " + line)  # codice a col 1 → colonna 8
     return "\n".join(out)
 
 
