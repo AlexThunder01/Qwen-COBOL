@@ -81,12 +81,15 @@ Dataset finale `cobol-sft-dataset`, ~18k esempi:
 | mainframebench | 7.052 | Fsoft-AIC/MainframeBench (umano, MIT) | explain, QA, MCQ |
 | teacher_bulk | 9.851 | XMAiNframe-instruct-10.5b (domain expert) | explain, refactor, translate, debug |
 | alibaba_gold | 946 | qwen3-coder-plus / 235b-thinking / max (frontier) | task difficili + reasoning |
-| generate_spec_valid | 198 | qwen3.7-max-preview ecc (frontier) | **generate-from-spec** (task COBOLEval) |
+| generate_spec_valid | **887** | DeepSeek-V4-pro, GLM-5.1, Qwen3.7-max ecc (frontier multi-famiglia) | **generate-from-spec** (task COBOLEval) |
 
-Nota generate-from-spec: 433 generati → 198 compile-validi (45.7%) dopo recupero formato
-(re-indentazione: 1ª riga + commenti `*` da col 1 a col 7). Il teacher frontier scrive COBOL
-con formato a colonne incoerente → tasso di compile-validità basso. Auto-fix loop tentato ma
-deprioritizzato (connessione Modal instabile sui run lunghi; recupero marginale su supplemento ~1%).
+Nota generate-from-spec (FINALE): **2.002 generati → 887 compile-validi (44.3%)** dopo
+re-indentazione (commenti `*` da col 1 a col 7, 1ª riga). Cascata di 7 teacher frontier
+multi-famiglia con quote separate (DeepSeek V4-pro, qwen3-coder-next, GLM-5.1, qwen3.7-max
++ snapshot, qwen3-coder-plus-2025-09-23) per diversità + runway. Tasso ~44% per formato a
+colonne incoerente dei teacher (specie non-Qwen). 1.115 falliti salvati in `cobol-spec-failed`
+con errore cobc (auto-fix loop disponibile ma non necessario: 887 = milestone ottimale, ~5%
+del dataset sul task target). **Dataset SFT totale: ~18.7k esempi.**
 
 ### Decisioni strategiche W3
 - **CPT saltato**: il bottleneck (W1) è comportamento/sintassi, non conoscenza sintattica
