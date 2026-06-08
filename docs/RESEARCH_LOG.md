@@ -81,15 +81,26 @@ Dataset finale `cobol-sft-dataset`, ~18k esempi:
 | mainframebench | 7.052 | Fsoft-AIC/MainframeBench (umano, MIT) | explain, QA, MCQ |
 | teacher_bulk | 9.851 | XMAiNframe-instruct-10.5b (domain expert) | explain, refactor, translate, debug |
 | alibaba_gold | 946 | qwen3-coder-plus / 235b-thinking / max (frontier) | task difficili + reasoning |
-| generate_spec_valid | **887** | DeepSeek-V4-pro, GLM-5.1, Qwen3.7-max ecc (frontier multi-famiglia) | **generate-from-spec** (task COBOLEval) |
+| generate_spec_valid | **1.109** | DeepSeek-V4-pro, GLM-5.1, Qwen3.7-max ecc (frontier multi-famiglia) | **generate-from-spec** (task COBOLEval) |
 
-Nota generate-from-spec (FINALE): **2.002 generati → 887 compile-validi (44.3%)** dopo
-re-indentazione (commenti `*` da col 1 a col 7, 1ª riga). Cascata di 7 teacher frontier
-multi-famiglia con quote separate (DeepSeek V4-pro, qwen3-coder-next, GLM-5.1, qwen3.7-max
-+ snapshot, qwen3-coder-plus-2025-09-23) per diversità + runway. Tasso ~44% per formato a
-colonne incoerente dei teacher (specie non-Qwen). 1.115 falliti salvati in `cobol-spec-failed`
-con errore cobc (auto-fix loop disponibile ma non necessario: 887 = milestone ottimale, ~5%
-del dataset sul task target). **Dataset SFT totale: ~18.7k esempi.**
+Nota generate-from-spec (FINALE): **2.002 generati → 1.109 compile-validi (55.4%)** dopo
+re-indentazione. Cascata di 7 teacher frontier multi-famiglia con quote separate (DeepSeek
+V4-pro, qwen3-coder-next, GLM-5.1, qwen3.7-max + snapshot, qwen3-coder-plus-2025-09-23) per
+diversità + runway. Validità salita per gradi via fix successivi della re-indentazione:
+44.3% (887) → 55.4% (1.109) forzando OGNI riga commento `*` a colonna 7 (bug ricorrente del
+formato a colonne COBOL: i commenti dei teacher erano a col 1/8/11). I 893 falliti restanti
+(`cobol-spec-failed`) hanno errori più vari (sintassi vera + formati non banali); auto-fix
+loop disponibile ma non necessario. **Dataset SFT totale: ~19k esempi** (~6% generate-from-spec).
+
+## Ablation pianificate (esperimenti per il paper)
+
+Per sostituire i *priors* con dati misurati (non ancora fatte; priorità DOPO il training+eval
+principale, budget GCP €257 permettendo):
+1. **generate-from-spec sì/no**: SFT con 0 vs 1.109 esempi del task target → il test più
+   informativo: *i dati del task target aiutano davvero il Pass@1?* (più della variazione 887 vs 1109).
+2. **CPT sì/no**: base vanilla vs base + CPT leggero (corpus 45M, disponibile).
+3. **DoRA vs LoRA**: stesso run, quantifica il guadagno dell'adapter più costoso.
+4. **Thinking on/off post-SFT**: costo/beneficio (qualità vs latenza).
 
 ### Decisioni strategiche W3
 - **CPT saltato**: il bottleneck (W1) è comportamento/sintassi, non conoscenza sintattica
