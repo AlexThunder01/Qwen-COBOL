@@ -54,6 +54,8 @@ def train(max_steps: int = -1, load_4bit: bool = False) -> dict:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger(__name__)
     os.environ["HF_HOME"] = CACHE
+    # Riduce la frammentazione CUDA (esatto, solo allocatore) → recupera memoria
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     token = os.environ["HF_TOKEN"]
 
     def _repo_size_gb() -> float:
