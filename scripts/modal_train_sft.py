@@ -36,7 +36,7 @@ CACHE = "/models"
 
 
 @app.function(
-    gpu="A100-80GB",
+    gpu="RTX-PRO-6000",   # 96GB Blackwell → bf16 27B no-checkpointing (esatto + veloce)
     volumes={CACHE: model_vol},
     timeout=6 * 3600,
     secrets=[modal.Secret.from_name("huggingface-secret")],
