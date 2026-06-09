@@ -16,6 +16,7 @@ import modal
 
 image = (
     modal.Image.from_registry("python:3.11-slim-trixie")
+    .apt_install("build-essential")   # gcc per i kernel Triton (bitsandbytes/optimizer)
     .pip_install(
         "torch==2.7.0",       # transformers 5.x richiede torch>=2.6 (float8_e8m0fnu)
         "transformers>=4.51", "peft>=0.13", "accelerate>=1.0",
