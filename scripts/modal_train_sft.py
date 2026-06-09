@@ -119,20 +119,23 @@ def train(max_steps: int = -1, load_4bit: bool = False) -> dict:
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         task_type="CAUSAL_LM", use_dora=True, use_rslora=True,
     )
+    # Ottimizzazioni ESATTE (zero impatto qualità): SDPA attention (kernel flash
+    # integrati in PyTorch) + niente gradient checkpointing (a batch 2 su 80GB c'è
+    # memoria → matematica identica, ~1.6x più veloce). Solo memoria/velocità.
     if load_4bit:
-        logger.info("Carico 27B in 4-bit (QDoRA) …")
+        logger.info("Carico 27B in 4-bit (QDoRA) + SDPA …")
         bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                  bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
         model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, quantization_config=bnb,
                                                      device_map="auto", token=token,
-                                                     torch_dtype=torch.bfloat16, cache_dir=CACHE)
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+                                                     torch_dtype=torch.bfloat16, cache_dir=CACHE,
+                                                     attn_implementation="sdpa")
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
     else:
-        logger.info("Carico 27B in bf16 (DoRA piena precisione) …")
+        logger.info("Carico 27B in bf16 (DoRA) + SDPA, no gradient checkpointing …")
         model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, device_map="auto", token=token,
-                                                     torch_dtype=torch.bfloat16, cache_dir=CACHE)
-        model.gradient_checkpointing_enable()
-        model.enable_input_require_grads()
+                                                     torch_dtype=torch.bfloat16, cache_dir=CACHE,
+                                                     attn_implementation="sdpa")
     model = get_peft_model(model, lora)
     model.print_trainable_parameters()
     model.config.use_cache = False
