@@ -17,7 +17,8 @@ import modal
 image = (
     modal.Image.from_registry("python:3.11-slim-trixie")
     .pip_install(
-        "torch==2.5.1", "transformers>=4.51", "peft>=0.13", "accelerate>=1.0",
+        "torch==2.7.0",       # transformers 5.x richiede torch>=2.6 (float8_e8m0fnu)
+        "transformers>=4.51", "peft>=0.13", "accelerate>=1.0",
         "bitsandbytes>=0.44", "datasets", "huggingface-hub", "sentencepiece", "protobuf",
     )
 )
