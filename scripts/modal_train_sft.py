@@ -55,15 +55,26 @@ def train(max_steps: int = -1, load_4bit: bool = False) -> dict:
     os.environ["HF_HOME"] = CACHE
     token = os.environ["HF_TOKEN"]
 
+    def _repo_size_gb() -> float:
+        from huggingface_hub import HfApi
+        try:
+            info = HfApi(token=token).repo_info(ADAPTER_REPO, repo_type="model", files_metadata=True)
+            return sum((getattr(f, "size", 0) or 0) for f in info.siblings) / 1e9
+        except Exception:
+            return -1.0
+
     class HFBackup(TrainerCallback):
         def on_step_end(self, args, state, control, model=None, **kw):
             if model and state.global_step > 0 and state.global_step % HF_BACKUP_EVERY == 0:
                 try:
                     model.push_to_hub(ADAPTER_REPO, token=token,
                                       commit_message=f"backup step {state.global_step}")
-                    logger.info("Backup HF @ step %d", state.global_step)
+                    sz = _repo_size_gb()
+                    logger.info("Backup HF @ step %d — repo adapter: %.2f GB", state.global_step, sz)
                 except Exception as e:
-                    logger.warning("Backup HF fallito: %s", e)
+                    # Push fallito (storage/rete) → NON ferma il training, salta il backup
+                    logger.warning("Backup HF @ step %d FALLITO (training continua): %s",
+                                   state.global_step, e)
 
     tok = AutoTokenizer.from_pretrained(BASE_MODEL, token=token, cache_dir=CACHE)
     if tok.pad_token is None:
