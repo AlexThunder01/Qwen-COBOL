@@ -18,16 +18,17 @@ Materia prima per il paper. Aggiornato man mano. (Ultimo agg.: 2026-06-05)
 
 | Piattaforma | Ruolo | Note |
 |---|---|---|
-| Modal (serverless A100/H100) | eval, inference batch (teacher) | crediti free, ~$28 iniziali |
-| Lightning AI (L40S, RTX PRO 6000) | tentativo training | crediti free esauriti |
+| Modal (serverless) | eval, inference teacher, **training finale** | 2 workspace (~$7 ciascuno); RTX PRO 6000 Blackwell |
+| Lightning AI (L40S, RTX PRO 6000) | tentativo training W4 | crediti free esauriti prima del completamento |
 | Kaggle (CPU, 2×T4) | data processing, ingest corpus | 30h/sett free |
 | Google AI Studio / Alibaba DashScope | teacher per dati sintetici | free tier |
-| GCP (A100, €258 trial) | training finale | quota GPU richiesta |
+| GCP (A100, €258 trial) | pianificato training, **mai usato** | quota GPU NEGATA due volte (account nuovo, no billing history) |
 | HF Hub | storage dataset/adapter | privato |
 
-**Lezione infra**: il free tier è frammentato e ogni piattaforma ha vincoli diversi
-(Lightning sessioni limitate, Modal serverless costoso per run lunghe, Kaggle T4 troppo
-piccola per 27B). La strategia ottimale è assegnare ogni workload alla piattaforma giusta.
+**Lezione infra**: il free tier è frammentato e ogni piattaforma ha vincoli non ovvi.
+GCP nega le quota GPU ai nuovi account anche con trial attivo. Modal serverless è costoso per
+run lunghe ma l'unica opzione GPU disponibile rimasta. La strategia ottimale è assegnare ogni
+workload alla piattaforma giusta — ma in pratica ci si adatta ai vincoli di quota.
 
 ## 2. W1 — Baseline (con CORREZIONE CRITICA)
 
@@ -95,12 +96,21 @@ loop disponibile ma non necessario. **Dataset SFT totale: ~19k esempi** (~6% gen
 ## Ablation pianificate (esperimenti per il paper)
 
 Per sostituire i *priors* con dati misurati (non ancora fatte; priorità DOPO il training+eval
-principale, budget GCP €257 permettendo):
+principale):
 1. **generate-from-spec sì/no**: SFT con 0 vs 1.109 esempi del task target → il test più
    informativo: *i dati del task target aiutano davvero il Pass@1?* (più della variazione 887 vs 1109).
 2. **CPT sì/no**: base vanilla vs base + CPT leggero (corpus 45M, disponibile).
-3. **DoRA vs LoRA**: stesso run, quantifica il guadagno dell'adapter più costoso.
+3. **DoRA r=128 vs LoRA r=64**: velocità misurata 90.1s/it (DoRA r=128 + grad-ckpt).
+   Stima LoRA r=64: DoRA overhead ~1.4x + grad-ckpt ~1.3x → 90.1÷1.82 ≈ **~45-50s/it**
+   (non "3x più veloce" come scritto ingenuamente: r dimezzato contribuisce poco perché il
+   forward del 27B domina). NB: questa ablation cambia 3 variabili insieme (tipo, rank,
+   checkpointing) — non isola il contributo di ciascuna. Per il paper servirebbero assi
+   separati: DoRA vs LoRA *a parità di rank*, e r=128 vs r=64 *a parità di tipo*.
+   Anche "no-ckpt per LoRA r=64" è plausibile ma non misurato: l'OOM era a 93.98GB con
+   DoRA, LoRA ha meno overhead adapter ma 96GB rimane stretto.
 4. **Thinking on/off post-SFT**: costo/beneficio (qualità vs latenza).
+5. **Epoche parziali**: 0.34 ep (step 150) vs 0.69 ep (step 300) vs 1 ep — il trade-off
+   budget/qualità. Il run corrente darà il punto step-150.
 
 ### Decisioni strategiche W3
 - **CPT saltato**: il bottleneck (W1) è comportamento/sintassi, non conoscenza sintattica
@@ -157,15 +167,50 @@ dall'errore, ri-compilati, i recuperati rientrano. (Self-correction guidata dal 
   modello è addestrato sul formato thinking → senza thinking emette EOS subito); con thinking
   ON rambla (~4000 token di reasoning, lento). Inconcludente, è un throwaway.
 
-### Setup finale (GCP)
-- `scripts/train_sft.py` standalone: **bf16** su A100-80GB (qualità piena, no tassa dequant),
-  fallback `--load-4bit` per A100-40GB. Packing manuale, 1 epoca, push su HF.
-- **Adapter: DoRA r=128 + rsLoRA** (scelto per qualità massima robusta, avendo memoria/budget
-  su A100-80GB). DoRA > LoRA (vicino al full-FT ai ranghi bassi); rsLoRA stabilizza il rango
-  alto. ~1.4x più lento di LoRA, accettabile. GaLore (full-param, ceiling più alto) scartato
-  per rischio implementativo dopo i molti bug infra — affidabilità > guadagno marginale su SFT.
-  NB: inizialmente DoRA→LoRA su Lightning per il budget; ripristinato DoRA ora che c'è margine.
-- Budget Modal esaurito (~$7) → training spostato su GCP €258.
+### Setup finale (Modal RTX PRO 6000 Blackwell)
+
+GCP quota negata → training rimasto su Modal. `scripts/modal_train_sft.py`.
+
+**Hardware**: RTX PRO 6000 Blackwell (96GB VRAM, sm_120, $3.03/h).
+
+**Bug infra Blackwell (paper-worthy)**:
+- torch 2.7.0 da PyPI include cu126 → `CUDA error: no kernel image available` su sm_120.
+  Fix: installare torch dall'index cu128 (`https://download.pytorch.org/whl/cu128`).
+- bitsandbytes ≥ 0.45 richiesto per supporto CUDA 12.8 (Blackwell).
+
+**OOM senza gradient checkpointing**:
+- 27B bf16 (54GB pesi) + DoRA r=128 (attivazioni) + batch 2×2048 → 93.98GB usati su 96GB
+  → OOM nel forward DoRA ("Tried to allocate 340MB, GPU 0 has 94.74GB in use").
+- Fix: `gradient_checkpointing=True` + `use_reentrant=False` + `enable_input_require_grads()`.
+  Gradient checkpointing è **matematicamente identico** al no-checkpointing (ricalcola le
+  attivazioni nel backward invece di tenerle in VRAM), costa solo ~30% di velocità.
+
+**Adapter**: DoRA r=128 + rsLoRA, tutti 7 moduli (`q/k/v/o_proj`, `gate/up/down_proj`).
+bf16 pieno, niente quantizzazione. SDPA attention.
+
+**Velocità reale misurata**: **90.1 s/it** (stabilissimo, ~step 80+). Scomposizione:
+- 27B bf16 è già pesante da solo
+- DoRA aggiunge normalizzazione magnitudine+direzione per modulo nel forward
+- Gradient checkpointing +30% (ricalcolo forward nel backward)
+- r=128 = molte operazioni low-rank nei 7 moduli
+→ LoRA r=64 no-checkpointing sarebbe ~3-4× più veloce. Documentato come ablation.
+
+**Dataset e packing**: 6.968 blocchi da 2048 token (1 epoca = 436 step con eff. batch 16).
+Split: mainframebench + teacher_bulk + alibaba_gold + generate_spec_valid.
+
+**Budget reale vs proiezione**:
+- Budget disponibile catania-alex3: **$7.59** (non $30 come stimato inizialmente).
+- 1 epoca piena: 436 step × 90.1s × $3.03/3600 = **~$33 → non fattibile**.
+- Piano adottato: stop al **backup HF di step 150** (0.34 epoca, ~$5.1 compute + $6 già spesi).
+  Il monitor ferma l'app automaticamente appena vede il backup.
+- Backup HF ogni 150 step (il checkpoint locale è ephemeral e muore con l'app).
+
+**Stato training (2026-06-10)**:
+- Step 83/436, loss 0.5522, lr 0.000191 → curva sana, in discesa.
+- Target: fermarsi a step 150, eval vs baseline 20.55%.
+
+**GCP**: richiesta quota negata due volte ("Your project does not have sufficient history
+to request GPU quotas"). No accesso effettivo ad A100 GCP con il trial.
 
 ## 6. Metodologia di eval e la SAGA del bug del harness (lezioni per il paper)
 

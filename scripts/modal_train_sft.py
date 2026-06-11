@@ -17,10 +17,13 @@ import modal
 image = (
     modal.Image.from_registry("python:3.11-slim-trixie")
     .apt_install("build-essential")   # gcc per i kernel Triton (bitsandbytes/optimizer)
+    # torch da index cu128 → kernel CUDA sm_120 per Blackwell (RTX PRO 6000).
+    # Il build cu126 di default NON ha i kernel Blackwell ("no kernel image available").
+    .pip_install("torch==2.7.0", index_url="https://download.pytorch.org/whl/cu128")
     .pip_install(
-        "torch==2.7.0",       # transformers 5.x richiede torch>=2.6 (float8_e8m0fnu)
         "transformers>=4.51", "peft>=0.13", "accelerate>=1.0",
-        "bitsandbytes>=0.44", "datasets", "huggingface-hub", "sentencepiece", "protobuf",
+        "bitsandbytes>=0.45",  # CUDA 12.8/Blackwell supportato solo da 0.45+ (serve a paged_adamw_8bit)
+        "datasets", "huggingface-hub", "sentencepiece", "protobuf",
     )
 )
 app = modal.App("qwen-cobol-sft-train", image=image)
@@ -36,9 +39,9 @@ CACHE = "/models"
 
 
 @app.function(
-    gpu="RTX-PRO-6000",   # 96GB Blackwell → bf16 27B no-checkpointing (esatto + veloce)
+    gpu="RTX-PRO-6000",   # 96GB Blackwell (cu128 torch) → bf16 27B DoRA + grad-checkpointing
     volumes={CACHE: model_vol},
-    timeout=6 * 3600,
+    timeout=10 * 3600,    # margine: 1 epoca + push; checkpoint/resume rendono lo stop non distruttivo
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
 def train(max_steps: int = -1, load_4bit: bool = False) -> dict:
@@ -122,22 +125,27 @@ def train(max_steps: int = -1, load_4bit: bool = False) -> dict:
         task_type="CAUSAL_LM", use_dora=True, use_rslora=True,
     )
     # Ottimizzazioni ESATTE (zero impatto qualità): SDPA attention (kernel flash
-    # integrati in PyTorch) + niente gradient checkpointing (a batch 2 su 80GB c'è
-    # memoria → matematica identica, ~1.6x più veloce). Solo memoria/velocità.
+    # integrati in PyTorch) + gradient checkpointing (ricalcola le attivazioni nel
+    # backward invece di tenerle in VRAM → matematica IDENTICA, costa solo ~20-30%
+    # di velocità). Necessario: senza, le attivazioni del 27B no-ckpt riempiono i
+    # 96GB e OOM nel forward DoRA. Solo memoria/velocità, mai qualità.
     if load_4bit:
-        logger.info("Carico 27B in 4-bit (QDoRA) + SDPA …")
+        logger.info("Carico 27B in 4-bit (QDoRA) + SDPA + grad-checkpointing …")
         bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                  bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
         model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, quantization_config=bnb,
                                                      device_map="auto", token=token,
                                                      torch_dtype=torch.bfloat16, cache_dir=CACHE,
                                                      attn_implementation="sdpa")
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     else:
-        logger.info("Carico 27B in bf16 (DoRA) + SDPA, no gradient checkpointing …")
+        logger.info("Carico 27B in bf16 (DoRA) + SDPA + grad-checkpointing …")
         model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, device_map="auto", token=token,
                                                      torch_dtype=torch.bfloat16, cache_dir=CACHE,
                                                      attn_implementation="sdpa")
+        # con grad-checkpointing su modello frozen serve che gli input embedding
+        # producano gradiente, altrimenti il backward non raggiunge gli adapter
+        model.enable_input_require_grads()
     model = get_peft_model(model, lora)
     model.print_trainable_parameters()
     model.config.use_cache = False
@@ -148,6 +156,7 @@ def train(max_steps: int = -1, load_4bit: bool = False) -> dict:
         per_device_train_batch_size=2, gradient_accumulation_steps=8,  # eff 16, conservativo bf16
         learning_rate=2.0e-4, lr_scheduler_type="cosine", warmup_ratio=0.05, weight_decay=0.01,
         bf16=True, logging_steps=10, save_steps=50, save_total_limit=1,
+        gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False},
         optim="paged_adamw_8bit", report_to="none", push_to_hub=False,
     )
     trainer = Trainer(model=model, args=args, train_dataset=packed,
